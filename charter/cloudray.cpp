@@ -109,6 +109,10 @@ float deg2rad(const float &deg)
 { return deg * M_PI / 180; }
 
 inline
+float rad2deg(const float &rad)
+{ return rad * 180 / M_PI; }
+
+inline
 Vec3f mix(const Vec3f &a, const Vec3f& b, const float &mixValue)
 { return a * (1 - mixValue) + b * mixValue; }
 
@@ -141,17 +145,99 @@ enum MaterialType { DIFFUSE_AND_GLOSSY, REFLECTION_AND_REFRACTION, REFLECTION };
 enum RayStatus { VALID_RAY, NOHIT_RAY, INVISIBLE_RAY, OVERFLOW_RAY };
 enum RayType { ORIG_RAYTYPE, RELECTION_RAYTYPE, REFRACTION_RAYTYPE, DIFFUSE_RAYTYPE };
 
+// shade point on each object
+struct ShadePoint {
+    Vec3f globalAmt;
+    /* DEBUG info : vertion index and vertiacl index of this point */
+    uint32_t   v;
+    uint32_t   h;
+};
+
+
 class Object
 {
  public:
     Object() :
         name("NO NAME"),
         materialType(DIFFUSE_AND_GLOSSY),
-        ior(1.3), Kd(0.8), Ks(0.2), diffuseColor(0.2), specularExponent(25) {}
+        ior(1.3), Kd(0.8), Ks(0.2), diffuseColor(0.2), specularExponent(25),
+        verticalRes(0), horizonRes(0), verticalRange(0), horizonRange(0), pShadePoints(nullptr) {}
     virtual ~Object() {}
     virtual bool intersect(const Vec3f &, const Vec3f &, float &, uint32_t &, Vec2f &) const = 0;
-    virtual void getSurfaceProperties(const Vec3f &, const Vec3f &, const uint32_t &, const Vec2f &, Vec3f &, Vec2f &) const = 0;
+    virtual ShadePoint* getSurfaceProperties(const Vec3f &, const Vec3f &, const uint32_t &, const Vec2f &, Vec3f &, Vec2f &) const = 0;
     virtual Vec3f evalDiffuseColor(const Vec2f &) const { return diffuseColor; }
+    virtual Vec3f pointRel2Abs(const Vec3f &) const =0;
+    virtual Vec3f pointAbs2Rel(const Vec3f &) const =0;
+    void setName(std::string objName)
+    {
+        name = objName;
+    }
+    std::string getName(void) {return name;}
+    // store the pre-caculated shade value of each point
+    void initShadePoints(float vRes, float hRes, uint32_t vRange, uint32_t hRange)
+    {
+        verticalRes  = vRes;
+        horizonRes   = hRes;
+        verticalRange = vRange;
+        horizonRange  = hRange;
+        uint32_t size = sizeof(ShadePoint) * verticalRange * horizonRange;
+        pShadePoints = (ShadePoint *)malloc(size);
+        std::memset(pShadePoints, 0, size);
+    }
+    void reset(void)
+    {
+        uint32_t size = sizeof(ShadePoint) * verticalRange * horizonRange;
+        std::memset(pShadePoints, 0, size);
+        // DEBUG
+        for (uint32_t v = 0; v < verticalRange; ++v) {
+            for (uint32_t h = 0; h < horizonRange; ++h) {
+                (pShadePoints + v*horizonRange + h)->v = v;
+                (pShadePoints + v*horizonRange + h)->h = h;
+            }
+        }
+    }
+    ShadePoint *getShadePoint(float theta, float phi) const
+    {
+        uint32_t v,h;
+        v = floor(theta*verticalRes);
+        h = floor(phi*horizonRes);
+//        std::printf("getShadePoint v(%d) h(%d)\n", v, h);
+        if (v>=verticalRange) {
+            std::printf("ERROR: obj(%s) getShadePoint v(%d) h(%d)\n", name.c_str(), v, h);
+            v = verticalRange - 1 ;
+            //return nullptr;
+        }
+        if (h>=horizonRange) {
+            std::printf("ERROR: obj(%s) getShadePoint v(%d) h(%d)\n", name.c_str(), v, h);
+            h = horizonRange - 1 ;
+            //return nullptr;
+        }
+        return pShadePoints + v*horizonRange + h;
+
+    }
+    void dumpShadePoint(const Options &option) const
+    {
+        char outfile[256];
+        std::sprintf(outfile,
+            "obj[%s]_x.%d_y.%d_z.%d_fov.%d_dep.%d_spp.%d_split.%d.ppm", name.c_str(), (int)option.viewpoint.x,
+            (int)option.viewpoint.y, (int)option.viewpoint.z, (int)option.fov, option.maxDepth, option.spp,
+            option.diffuseSpliter);
+        // save framebuffer to file
+        std::ofstream ofs;
+        /* text file for compare */
+        ofs.open(outfile);
+        ofs << "P3\n" << horizonRange << " " << verticalRange << "\n255\n";
+        for (uint32_t j = 0; j < verticalRange; ++j) {
+            for (uint32_t i = 0; i < horizonRange; ++i) {
+                int r = (int)(255 * clamp(0, 1, (pShadePoints + j*horizonRange + i)->globalAmt.x));
+                int g = (int)(255 * clamp(0, 1, (pShadePoints + j*horizonRange + i)->globalAmt.y));
+                int b = (int)(255 * clamp(0, 1, (pShadePoints + j*horizonRange + i)->globalAmt.z));
+                ofs << r << " " << g << " " << b << "\n ";
+            }
+        }
+        ofs.close();
+
+    }
     // material properties
     MaterialType materialType;
     float ior;
@@ -159,6 +245,18 @@ class Object
     Vec3f diffuseColor;
     float specularExponent;
     std::string  name;
+    // vertical resolution is the factor to split x from [min, max] or THETA from [0, 180]
+    // we set the vertical resolution as r/10 by now.
+    float verticalRes;
+    // vertical point range is ceil(180*verticalRes)
+    uint32_t verticalRange;
+    // horizontal resolution is the factor to split y from [min, max] or PHI from [0, 360]
+    // we set the horizontal resolution as r/10 by now.
+    float horizonRes;
+    // horizontal point range is ceil(360*horizonRange)
+    uint32_t horizonRange;
+    // the number point is verticalRange * horizonRange
+    struct ShadePoint * pShadePoints;
 };
 
 class Ray
@@ -202,7 +300,7 @@ struct RayStore
     Ray *currRay;
 //    struct Ray rays[VIEW_WIDTH][VIEW_HEIGHT];
     // creating the rays tracker
-    std::vector<std::unique_ptr<Ray>> origLink[VIEW_WIDTH][VIEW_HEIGHT];
+    std::vector<std::unique_ptr<Ray>> origViewLink[VIEW_WIDTH][VIEW_HEIGHT];
 
     // Counter of total memory to record rays
     uint64_t totalMem;
@@ -248,7 +346,12 @@ bool solveQuadratic(const float &a, const float &b, const float &c, float &x0, f
 
 class Sphere : public Object{
 public:
-    Sphere(const Vec3f &c, const float &r) : center(c), radius(r), radius2(r * r) {}
+    Sphere(const std::string name, const Vec3f &c, const float &r) : center(c), radius(r), radius2(r * r) 
+    {
+        float res = 0.5;
+        setName(name);
+        initShadePoints(r*res, r*res, ceil(180*r*res), ceil(360*r*res));
+    }
     bool intersect(const Vec3f &orig, const Vec3f &dir, float &tnear, uint32_t &index, Vec2f &uv) const
     {
         // analytic solution
@@ -264,9 +367,30 @@ public:
 
         return true;
     }
+
+    Vec3f pointRel2Abs(const Vec3f &rel) const
+    {
+        return center + rel*radius;
+    }
+
+    Vec3f pointAbs2Rel(const Vec3f &abs) const
+    {
+        return (abs - center) * (1/radius);
+    }
     
-    void getSurfaceProperties(const Vec3f &P, const Vec3f &I, const uint32_t &index, const Vec2f &uv, Vec3f &N, Vec2f &st) const
-    { N = normalize(P - center); }
+    ShadePoint* getSurfaceProperties(const Vec3f &P, const Vec3f &I, const uint32_t &index, const Vec2f &uv, Vec3f &N, Vec2f &st) const
+    { 
+        N = normalize(P - center);
+        /* caculate the shadepoint on the surface */
+/*
+        uint32_t theta = floor(deg2rad(acos(N.z)));
+        uint32_t phi = floor((atan2(N.y, N.x)));
+*/
+        float theta = rad2deg(acos(N.y));
+        float phi = rad2deg(atan2(N.x, N.z));
+        if (phi < 0) phi += 360;
+        return getShadePoint(theta, phi);
+    }
 
     Vec3f center;
     float radius, radius2;
@@ -304,11 +428,13 @@ class MeshTriangle : public Object
 {
 public:
     MeshTriangle(
+        const std::string name, 
         const Vec3f *verts,
         const uint32_t *vertsIndex,
         const uint32_t &numTris,
         const Vec2f *st)
     {
+        setName(name);
         uint32_t maxIndex = 0;
         for (uint32_t i = 0; i < numTris * 3; ++i)
             if (vertsIndex[i] > maxIndex) maxIndex = vertsIndex[i];
@@ -342,7 +468,17 @@ public:
         return intersect;
     }
 
-    void getSurfaceProperties(const Vec3f &P, const Vec3f &I, const uint32_t &index, const Vec2f &uv, Vec3f &N, Vec2f &st) const
+    Vec3f pointRel2Abs(const Vec3f &rel) const
+    {
+        return rel;
+    }
+
+    Vec3f pointAbs2Rel(const Vec3f &abs) const
+    {
+        return abs;
+    }
+
+    ShadePoint * getSurfaceProperties(const Vec3f &P, const Vec3f &I, const uint32_t &index, const Vec2f &uv, Vec3f &N, Vec2f &st) const
     {
         const Vec3f &v0 = vertices[vertexIndex[index * 3]];
         const Vec3f &v1 = vertices[vertexIndex[index * 3 + 1]];
@@ -354,6 +490,7 @@ public:
         const Vec2f &st1 = stCoordinates[vertexIndex[index * 3 + 1]];
         const Vec2f &st2 = stCoordinates[vertexIndex[index * 3 + 2]];
         st = st0 * (1 - uv.x - uv.y) + st1 * uv.x + st2 * uv.y;
+        return nullptr;
     }
 
     Vec3f evalDiffuseColor(const Vec2f &st) const
@@ -518,9 +655,9 @@ void dumpPix(
     uint32_t j) 
 {
     std::printf("***********dump rays of pixel(%d,%d)**************\n", i, j);
-    dumpRay(rayStore.origLink[i][j], 0, 1);
+    dumpRay(rayStore.origViewLink[i][j], 0, 1);
 /*
-    auto it= rayStore.origLink[i][j].begin();
+    auto it= rayStore.origViewLink[i][j].begin();
     std::printf("***********tracing ray(%d,%d): orig(%f,%f,%f)------>direction(%f,%f,%f)*************\n",
                 i, j, curr[0]->orig.x, curr[0]->orig.y, curr[0]->orig.z, curr[0]->dir.x, curr[0]->dir.y, curr[0]->dir.z);
     if(curr[0]->hitObject != nullptr) {
@@ -529,6 +666,174 @@ void dumpPix(
 */
 }
 
+/* precast ray from light to object*/
+Vec3f precastRay(
+    RayStore &rayStore,
+    const Vec3f &orig, const Vec3f &dir,
+    const std::vector<std::unique_ptr<Object>> &objects,
+    const Vec3f intensity,
+    // index of object which is direct casted
+    uint32_t idx,
+    uint32_t v, uint32_t h,
+    const Options &options,
+    uint32_t depth)
+{
+    Ray * newRay = nullptr;
+    Ray * currRay = nullptr;
+
+    if (depth > options.maxDepth) {
+        rayStore.overflowRays++;
+        if(rayStore.currRay != nullptr) {
+            rayStore.currRay->status = OVERFLOW_RAY;
+            rayStore.currRay->overflowCount++;
+        }
+        return options.backgroundColor;
+    }
+
+    rayStore.totalRays++;
+    
+    Vec3f hitColor = options.backgroundColor;
+    float tnear = kInfinity;
+    Vec2f uv;
+    uint32_t index = 0;
+    Object *hitObject = nullptr;
+    ShadePoint * shadePoint = nullptr;
+    if (trace(orig, dir, objects, tnear, index, uv, &hitObject)) {
+        Vec3f hitPoint = orig + dir * tnear;
+        Vec3f N; // normal
+        Vec2f st; // st coordinates
+        shadePoint = hitObject->getSurfaceProperties(hitPoint, dir, index, uv, N, st);
+        if(depth >=1)
+            std::printf("this should not happen.depth=%d, orig(%f,%f,%f)-->dir(%f,%f,%f), hitpoint(%f,%f,%f)\n", 
+                        depth, orig.x, orig.y, orig.z, dir.x, dir.y, dir.z, hitPoint.x, hitPoint.y, hitPoint.z);
+        if (shadePoint == nullptr)
+            return hitColor;
+
+        Vec3f relTgt = hitObject->pointAbs2Rel(orig + dir);
+        Vec3f relHit = hitObject->pointAbs2Rel(hitPoint);
+        std::printf("Hitpoint not match. tgtRel(%f,%f,%f), hitpointRel(%f,%f,%f), v(%d, %d), h(%d, %d), tnear(%f)\n", 
+                    relTgt.x, relTgt.y, relTgt.z, relHit.x, relHit.y, relHit.z,
+                    v, shadePoint->v, h, shadePoint->h, tnear);
+        if(shadePoint->v != v || shadePoint->h != h) {
+            std::printf("##########################################\n");
+        }
+        float kr;
+        fresnel(dir, N, hitObject->ior, kr);
+        if (intensity.x < 0 || intensity.y <0 || intensity.z < 0 || kr <0)
+            std::printf("ERROR: intensity=(%f,%f,%f), kr=%f\n", intensity.x, intensity.y, intensity.z, kr);
+        shadePoint->globalAmt += intensity * kr;
+        if(rayStore.currRay != nullptr) {
+            rayStore.currRay->status = VALID_RAY;
+            rayStore.currRay->validCount++;
+            rayStore.currRay->hitObject = hitObject;
+            rayStore.currRay->hitPoint = hitPoint;
+        }
+        switch (hitObject->materialType) {
+            case REFLECTION_AND_REFRACTION:
+            {
+                Vec3f reflectionDirection = normalize(reflect(dir, N));
+                Vec3f refractionDirection = normalize(refract(dir, N, hitObject->ior));
+                Vec3f reflectionRayOrig = (dotProduct(reflectionDirection, N) < 0) ?
+                    hitPoint - N * options.bias :
+                    hitPoint + N * options.bias;
+                Vec3f refractionRayOrig = (dotProduct(refractionDirection, N) < 0) ?
+                    hitPoint - N * options.bias :
+                    hitPoint + N * options.bias;
+                rayStore.reflectionRays++;
+                // tracker the ray
+                if(rayStore.currRay != nullptr) {
+                    newRay = new Ray(reflectionRayOrig, reflectionDirection);
+                    rayStore.totalMem += sizeof(Ray);
+                    rayStore.currRay->reflectionLink.push_back(std::unique_ptr<Ray>(newRay));
+                    currRay = rayStore.currRay;
+                    rayStore.currRay = newRay;
+                }
+                Vec3f reflectionColor = precastRay(rayStore, reflectionRayOrig, reflectionDirection, objects, intensity*(1-kr), idx, v, h, options, depth + 1);
+                rayStore.currRay = currRay;
+                rayStore.refractionRays++;
+                // tracker the ray
+                if(rayStore.currRay != nullptr) {
+                    newRay = new Ray(refractionRayOrig, refractionDirection);
+                    rayStore.totalMem += sizeof(Ray);
+                    rayStore.currRay->refractoinLink.push_back(std::unique_ptr<Ray>(newRay));
+                    currRay = rayStore.currRay;
+                    rayStore.currRay = newRay;
+                }
+                Vec3f refractionColor = precastRay(rayStore, refractionRayOrig, refractionDirection, objects, intensity*(1-kr), idx, v, h, options, depth + 1);
+                rayStore.currRay = currRay;
+                hitColor = reflectionColor * kr + refractionColor * (1 - kr);
+                break;
+            }
+            case REFLECTION:
+            {
+                Vec3f reflectionDirection = reflect(dir, N);
+                Vec3f reflectionRayOrig = (dotProduct(reflectionDirection, N) < 0) ?
+                    hitPoint - N * options.bias :
+                    hitPoint + N * options.bias;
+                rayStore.reflectionRays++;
+                // tracker the ray
+                if(rayStore.currRay != nullptr) {
+                    newRay = new Ray(reflectionRayOrig, reflectionDirection);
+                    rayStore.totalMem += sizeof(Ray);
+                    rayStore.currRay->reflectionLink.push_back(std::unique_ptr<Ray>(newRay));
+                    currRay = rayStore.currRay;
+                    rayStore.currRay = newRay;
+                }
+                hitColor = precastRay(rayStore, reflectionRayOrig, reflectionDirection, objects, intensity*(1-kr), idx, v, h, options, depth + 1) * kr;
+                rayStore.currRay = currRay;
+                break;
+            }
+            default:
+            {
+                // Diffuse relfect
+                // each relfect light will share part of the light
+                // how many diffuse relfect light will be traced
+                uint32_t count = options.diffuseSpliter;
+                // Prevent memory waste before overflow
+                if (depth+1 > options.maxDepth) {
+                    rayStore.overflowRays += count;
+                    if(rayStore.currRay != nullptr)
+                        rayStore.currRay->overflowCount += count;
+                }
+                else {
+                    for (uint32_t i=1; i<=count; i++) {
+                        Vec3f reflectionDirection = diffuse(dir, N, i*3.0/count);
+                        //Vec3f reflectionDirection = normalize(reflect(dir, N));
+                        Vec3f reflectionRayOrig = hitPoint + N * options.bias;
+/*
+                        Vec3f reflectionRayOrig = (dotProduct(reflectionDirection, N) > 0) ?
+                            hitPoint + N * options.bias :
+                            hitPoint - N * options.bias;
+*/
+                        rayStore.diffuseRays++;
+                        //std::printf("DEBUG--(%d, %d)-->Total rays(%d) = Origin rays(%d) + Reflection rays(%d) + Refraction rays(%d) + Diffuse rays(%d)\n", i, depth, rays.totalRays, rays.originRays, rays.reflectionRays, rays.refractionRays, rays.diffuseRays);
+                        // tracker the ray
+                        if(rayStore.currRay != nullptr) {
+                            newRay = new Ray(reflectionRayOrig, reflectionDirection);
+                            rayStore.totalMem += sizeof(Ray);
+                            rayStore.currRay->diffuseLink.push_back(std::unique_ptr<Ray>(newRay));
+                            currRay = rayStore.currRay;
+                            rayStore.currRay = newRay;
+                        }
+                        precastRay(rayStore, reflectionRayOrig, reflectionDirection, objects, intensity*(1-kr), idx, v, h, options, depth + 1);
+                        rayStore.currRay = currRay;
+                    }
+                }
+                
+                break;
+            }
+        }
+    }
+    else {
+        rayStore.nohitRays++;
+        if(rayStore.currRay != nullptr) {
+            rayStore.currRay->status = NOHIT_RAY;
+            rayStore.currRay->nohitCount++;
+        }
+    }
+
+    return hitColor;
+}
 // [comment]
 // Implementation of the Whitted-syle light transport algorithm (E [S*] (D|G) L)
 //
@@ -552,7 +857,6 @@ Vec3f castRay(
     const std::vector<std::unique_ptr<Light>> &lights,
     const Options &options,
     uint32_t depth,
-    Vec3f &amt,
     bool test = false)
 {
 /*
@@ -563,9 +867,11 @@ Vec3f castRay(
     Ray * currRay = nullptr;
 
     if (depth > options.maxDepth) {
-        rayStore.currRay->status = OVERFLOW_RAY;
-        rayStore.currRay->overflowCount++;
         rayStore.overflowRays++;
+        if(rayStore.currRay != nullptr) {
+            rayStore.currRay->status = OVERFLOW_RAY;
+            rayStore.currRay->overflowCount++;
+        }
         return options.backgroundColor;
     }
 
@@ -573,23 +879,24 @@ Vec3f castRay(
     
     Vec3f hitColor = options.backgroundColor;
     Vec3f globalAmt = 0;
-    //Vec3f globalAmt = {0.1, 0.1, 0.1};
-    Vec3f deltaAmt = 0;
-    amt = deltaAmt;
     float tnear = kInfinity;
     Vec2f uv;
     uint32_t index = 0;
     Object *hitObject = nullptr;
+    ShadePoint * shadePoint = nullptr;
     if (trace(orig, dir, objects, tnear, index, uv, &hitObject)) {
         Vec3f hitPoint = orig + dir * tnear;
         Vec3f N; // normal
         Vec2f st; // st coordinates
-        hitObject->getSurfaceProperties(hitPoint, dir, index, uv, N, st);
-        Vec3f tmp = hitPoint;
-        rayStore.currRay->status = VALID_RAY;
-        rayStore.currRay->validCount++;
-        rayStore.currRay->hitObject = hitObject;
-        rayStore.currRay->hitPoint = hitPoint;
+        shadePoint = hitObject->getSurfaceProperties(hitPoint, dir, index, uv, N, st);
+        if (shadePoint != nullptr)
+            globalAmt = shadePoint->globalAmt;
+        if(rayStore.currRay != nullptr) {
+            rayStore.currRay->status = VALID_RAY;
+            rayStore.currRay->validCount++;
+            rayStore.currRay->hitObject = hitObject;
+            rayStore.currRay->hitPoint = hitPoint;
+        }
         switch (hitObject->materialType) {
             case REFLECTION_AND_REFRACTION:
             {
@@ -603,21 +910,25 @@ Vec3f castRay(
                     hitPoint + N * options.bias;
                 rayStore.reflectionRays++;
                 // tracker the ray
-                newRay = new Ray(reflectionRayOrig, reflectionDirection);
-                rayStore.totalMem += sizeof(Ray);
-                rayStore.currRay->reflectionLink.push_back(std::unique_ptr<Ray>(newRay));
-                currRay = rayStore.currRay;
-                rayStore.currRay = newRay;
-                Vec3f reflectionColor = castRay(rayStore, reflectionRayOrig, reflectionDirection, objects, lights, options, depth + 1, deltaAmt);
+                if(rayStore.currRay != nullptr) {
+                    newRay = new Ray(reflectionRayOrig, reflectionDirection);
+                    rayStore.totalMem += sizeof(Ray);
+                    rayStore.currRay->reflectionLink.push_back(std::unique_ptr<Ray>(newRay));
+                    currRay = rayStore.currRay;
+                    rayStore.currRay = newRay;
+                }
+                Vec3f reflectionColor = castRay(rayStore, reflectionRayOrig, reflectionDirection, objects, lights, options, depth + 1);
                 rayStore.currRay = currRay;
                 rayStore.refractionRays++;
                 // tracker the ray
-                newRay = new Ray(refractionRayOrig, refractionDirection);
-                rayStore.totalMem += sizeof(Ray);
-                rayStore.currRay->refractoinLink.push_back(std::unique_ptr<Ray>(newRay));
-                currRay = rayStore.currRay;
-                rayStore.currRay = newRay;
-                Vec3f refractionColor = castRay(rayStore, refractionRayOrig, refractionDirection, objects, lights, options, depth + 1, deltaAmt);
+                if(rayStore.currRay != nullptr) {
+                    newRay = new Ray(refractionRayOrig, refractionDirection);
+                    rayStore.totalMem += sizeof(Ray);
+                    rayStore.currRay->refractoinLink.push_back(std::unique_ptr<Ray>(newRay));
+                    currRay = rayStore.currRay;
+                    rayStore.currRay = newRay;
+                }
+                Vec3f refractionColor = castRay(rayStore, refractionRayOrig, refractionDirection, objects, lights, options, depth + 1);
                 rayStore.currRay = currRay;
                 float kr;
                 fresnel(dir, N, hitObject->ior, kr);
@@ -630,21 +941,24 @@ Vec3f castRay(
                 fresnel(dir, N, hitObject->ior, kr);
                 Vec3f reflectionDirection = reflect(dir, N);
                 Vec3f reflectionRayOrig = (dotProduct(reflectionDirection, N) < 0) ?
-                    hitPoint + N * options.bias :
-                    hitPoint - N * options.bias;
+                    hitPoint - N * options.bias :
+                    hitPoint + N * options.bias;
                 rayStore.reflectionRays++;
                 // tracker the ray
-                newRay = new Ray(reflectionRayOrig, reflectionDirection);
-                rayStore.totalMem += sizeof(Ray);
-                rayStore.currRay->reflectionLink.push_back(std::unique_ptr<Ray>(newRay));
-                currRay = rayStore.currRay;
-                rayStore.currRay = newRay;
-                hitColor = castRay(rayStore, reflectionRayOrig, reflectionDirection, objects, lights, options, depth + 1, deltaAmt) * kr;
+                if(rayStore.currRay != nullptr) {
+                    newRay = new Ray(reflectionRayOrig, reflectionDirection);
+                    rayStore.totalMem += sizeof(Ray);
+                    rayStore.currRay->reflectionLink.push_back(std::unique_ptr<Ray>(newRay));
+                    currRay = rayStore.currRay;
+                    rayStore.currRay = newRay;
+                }
+                hitColor = castRay(rayStore, reflectionRayOrig, reflectionDirection, objects, lights, options, depth + 1) * kr;
                 rayStore.currRay = currRay;
                 break;
             }
             default:
             {
+#if 0
                 // Diffuse relfect
                 // each relfect light will share part of the light
                 // how many diffuse relfect light will be traced
@@ -654,8 +968,9 @@ Vec3f castRay(
                 hitColor = 0;
                 // Prevent memory waste before overflow
                 if (depth+1 > options.maxDepth) {
-                    rayStore.currRay->overflowCount += count;
                     rayStore.overflowRays += count;
+                    if(rayStore.currRay != nullptr)
+                        rayStore.currRay->overflowCount += count;
                 }
                 else {
                     for (uint32_t i=1; i<=count; i++) {
@@ -667,16 +982,19 @@ Vec3f castRay(
                         rayStore.diffuseRays++;
                         //std::printf("DEBUG--(%d, %d)-->Total rays(%d) = Origin rays(%d) + Reflection rays(%d) + Refraction rays(%d) + Diffuse rays(%d)\n", i, depth, rays.totalRays, rays.originRays, rays.reflectionRays, rays.refractionRays, rays.diffuseRays);
                         // tracker the ray
-                        newRay = new Ray(reflectionRayOrig, reflectionDirection);
-                        rayStore.totalMem += sizeof(Ray);
-                        rayStore.currRay->diffuseLink.push_back(std::unique_ptr<Ray>(newRay));
-                        currRay = rayStore.currRay;
-                        rayStore.currRay = newRay;
-                        castRay(rayStore, reflectionRayOrig, reflectionDirection, objects, lights, options, depth + 1, deltaAmt);
+                        if(rayStore.currRay != nullptr) {
+                            newRay = new Ray(reflectionRayOrig, reflectionDirection);
+                            rayStore.totalMem += sizeof(Ray);
+                            rayStore.currRay->diffuseLink.push_back(std::unique_ptr<Ray>(newRay));
+                            currRay = rayStore.currRay;
+                            rayStore.currRay = newRay;
+                        }
+                        castRay(rayStore, reflectionRayOrig, reflectionDirection, objects, lights, options, depth + 1);
                         rayStore.currRay = currRay;
                         globalAmt += deltaAmt * powf(weight, depth+1);
                     }
                 }
+#endif
 
                 Vec3f lightAmt = 0, specularColor = 0;
                 // [comment]
@@ -692,9 +1010,10 @@ Vec3f castRay(
                 // [/comment]
                 for (uint32_t i = 0; i < lights.size(); ++i) {
                     Vec3f lightDir = lights[i]->position - hitPoint;
+                    lightDir = normalize(lightDir);
+#if 0
                     // square of the distance between hitPoint and the light
                     float lightDistance2 = dotProduct(lightDir, lightDir);
-                    lightDir = normalize(lightDir);
                     float LdotN = std::max(0.f, dotProduct(lightDir, N));
                     Object *shadowHitObject = nullptr;
                     float tNearShadow = kInfinity;
@@ -706,28 +1025,88 @@ Vec3f castRay(
                     rayStore.totalRays++;
 */
                     lightAmt += (1 - inShadow) * lights[i]->intensity * LdotN;
+#endif
                     Vec3f reflectionDirection = reflect(-lightDir, N);
                     specularColor += powf(std::max(0.f, -dotProduct(reflectionDirection, dir)), hitObject->specularExponent) * lights[i]->intensity;
                 }
+/*
                 if (lightAmt == 0) rayStore.invisibleRays++;
                 else rayStore.validRays++;
+*/
                 //LEO: debug, donot caculate specular now.
-                hitColor = (globalAmt + lightAmt) * hitObject->evalDiffuseColor(st) * hitObject->Kd;
-                //hitColor = (globalAmt) * hitObject->evalDiffuseColor(st) * hitObject->Kd + specularColor * hitObject->Ks;
-                amt = lightAmt;
+                //hitColor = (globalAmt + lightAmt) * hitObject->evalDiffuseColor(st) * hitObject->Kd;
+                hitColor = (globalAmt) * hitObject->evalDiffuseColor(st) + specularColor * hitObject->Ks;
+                //hitColor = (lightAmt) * hitObject->evalDiffuseColor(st) * hitObject->Kd + specularColor * hitObject->Ks;
                 
                 break;
             }
         }
     }
     else {
-        rayStore.currRay->status = NOHIT_RAY;
-        rayStore.currRay->nohitCount++;
         rayStore.nohitRays++;
+        if(rayStore.currRay != nullptr) {
+            rayStore.currRay->status = NOHIT_RAY;
+            rayStore.currRay->nohitCount++;
+        }
     }
 
     return hitColor;
 }
+
+
+/* prerender the object from light */
+void prerender(
+    RayStore &rayStore,
+    const Options &options,
+    const std::vector<std::unique_ptr<Object>> &objects,
+    const std::vector<std::unique_ptr<Light>> &lights)
+{
+    Vec3f orig = 0;
+    uint32_t v=0, h=0, vMax=0, hMax=0;
+    float vRes=0.f, hRes=0.f;
+    for (uint32_t i=0; i<objects.size(); i++) {
+        objects[i]->reset();
+    }
+    for (uint32_t l=0; l<lights.size(); l++) {
+        orig = lights[l]->position;
+        for (uint32_t i=0; i<objects.size(); i++) {
+            if (objects[i]->name != "sph1")
+                continue;
+            if (objects[i]->pShadePoints == nullptr)
+                continue;
+            vMax = objects[i]->verticalRange;
+            hMax = objects[i]->horizonRange;
+            vRes = objects[i]->verticalRes;
+            hRes = objects[i]->horizonRes;
+            for (v=0; v<vMax; v++) {
+                for (h=0; h<hMax; h++) {
+                // v(0, 1, 2, ... , 17) ==> theta(0, 10, 20, ..., 180)
+                float theta = deg2rad(std::min(180.f, (v+1)/vRes));
+                float phi = deg2rad(std::min(360.f, (h+1)/hRes));
+                // dir should be relative to orig
+                // dir = center + P.rel(theta, phi)*radius - orig
+                Vec3f relPoint = Vec3f(sin(phi)*sin(theta), cos(theta), cos(phi)*sin(theta));
+    //            Vec3f dir = objects[i]->pointRel2Abs(Vec3f(cos(phi) * sin(theta), sin(phi) * sin(theta), cos(theta))) - orig;
+                Vec3f dir = objects[i]->pointRel2Abs(relPoint) - orig;
+                rayStore.originRays++;
+                // tracker the ray
+    /*
+                Ray * currRay = new Ray(orig, dir);
+                rayStore.totalMem += sizeof(Ray);
+                rayStore.currRay = currRay;
+                rayStore.origViewLink[i][j].push_back(std::unique_ptr<Ray>(currRay));
+    */
+                precastRay(rayStore, orig, dir, objects, lights[0]->intensity, i, v, h, options, 0);
+                std::printf("light[%d]:%.0f%%\r",l, (h*vMax+v)*100.0/(vMax*hMax));
+                }
+            }
+            // dump object shadepoint as ppm file
+            objects[i]->dumpShadePoint(options);
+        }
+    }
+}
+
+
 
 // [comment]
 // The main render function. This where we iterate over all pixels in the image, generate
@@ -744,7 +1123,6 @@ void render(
     Vec3f orig = options.viewpoint;
     Vec3f *framebuffer = new Vec3f[options.width * options.height];
     Vec3f *pix = framebuffer;
-    Vec3f amp = 0;
     float scale = tan(deg2rad(options.fov * 0.5));
     float imageAspectRatio = options.width / (float)options.height;
     //Vec3f orig(0);
@@ -760,16 +1138,27 @@ void render(
             Ray * currRay = new Ray(orig, dir);
             rayStore.totalMem += sizeof(Ray);
             rayStore.currRay = currRay;
-            rayStore.origLink[i][j].push_back(std::unique_ptr<Ray>(currRay));
-            *(pix++) = castRay(rayStore, orig, dir, objects, lights, options, 0, amp);
-            std::printf("%.0f\%\r",(j*options.width+i)*100.0/(options.width * options.height));
+            rayStore.origViewLink[i][j].push_back(std::unique_ptr<Ray>(currRay));
+            *(pix++) = castRay(rayStore, orig, dir, objects, lights, options, 0);
+            std::printf("%.0f%%\r",(j*options.width+i)*100.0/(options.width * options.height));
         }
         //std::printf("%f\r",(j*1.0/options.height));
     }
 
     // save framebuffer to file
     std::ofstream ofs;
-    //ofs.open("./out.ppm");
+    /* text file for compare */
+    ofs.open(outfile);
+    ofs << "P3\n" << options.width << " " << options.height << "\n255\n";
+    for (uint32_t j = 0; j < options.height; ++j) {
+        for (uint32_t i = 0; i < options.width; ++i) {
+            int r = (int)(255 * clamp(0, 1, framebuffer[j*options.width + i].x));
+            int g = (int)(255 * clamp(0, 1, framebuffer[j*options.width + i].y));
+            int b = (int)(255 * clamp(0, 1, framebuffer[j*options.width + i].z));
+            ofs << r << " " << g << " " << b << "\n ";
+        }
+    }
+    ofs.close();
 
 /*
     ofs.open(outfile);
@@ -783,18 +1172,6 @@ void render(
     }
     ofs.close();
 */
-    /* text file for compare */
-    ofs.open(outfile);
-    ofs << "P3\n" << options.width << " " << options.height << "\n255\n";
-    for (uint32_t j = 0; j < options.height; ++j) {
-        for (uint32_t i = 0; i < options.width; ++i) {
-            int r = (int)(255 * clamp(0, 1, framebuffer[j*options.width + i].x));
-            int g = (int)(255 * clamp(0, 1, framebuffer[j*options.width + i].y));
-            int b = (int)(255 * clamp(0, 1, framebuffer[j*options.width + i].z));
-            ofs << r << " " << g << " " << b << "\n ";
-        }
-    }
-    ofs.close();
 
 
     delete [] framebuffer;
@@ -819,39 +1196,35 @@ int main(int argc, char **argv)
     sph1->materialType = REFLECTION_AND_REFRACTION;
 
 */
-    Sphere *sph1 = new Sphere(Vec3f(0, 0, -6), 2);
+    Sphere *sph1 = new Sphere("sph1", Vec3f(0, 0, -6), 2);
 /*
     sph1->ior = 1.5;
     sph1->materialType = REFLECTION_AND_REFRACTION;
 */
     sph1->materialType = DIFFUSE_AND_GLOSSY;
     sph1->diffuseColor = Vec3f(0.6, 0.7, 0.8);
-    sph1->name = "sph1";
 
-    Sphere *sph2 = new Sphere(Vec3f(9, -2, -15), 2);
+/*
+    Sphere *sph2 = new Sphere("sph2", Vec3f(9, -2, -15), 2);
     sph2->materialType = DIFFUSE_AND_GLOSSY;
     sph2->diffuseColor = Vec3f(0.6, 0.7, 0.8);
-    sph2->name = "sph2";
 
-    Sphere *sph3 = new Sphere(Vec3f(-3, -2, -7), 1);
+    Sphere *sph3 = new Sphere("sph3", Vec3f(-3, -2, -7), 1);
     sph3->materialType = DIFFUSE_AND_GLOSSY;
     sph3->diffuseColor = Vec3f(0.6, 0.7, 0.8);
-    sph3->name = "sph3";
 
-    Sphere *sph4 = new Sphere(Vec3f(3, 2, -7), 1);
+    Sphere *sph4 = new Sphere("sph4", Vec3f(3, 2, -7), 1);
     sph4->materialType = DIFFUSE_AND_GLOSSY;
     sph4->diffuseColor = Vec3f(0.6, 0.7, 0.8);
-    sph4->name = "sph4";
 
-    Sphere *sph5 = new Sphere(Vec3f(-3, -2, -15), 2);
+    Sphere *sph5 = new Sphere("sph5", Vec3f(-3, -2, -15), 2);
     sph5->materialType = DIFFUSE_AND_GLOSSY;
     sph5->diffuseColor = Vec3f(0.6, 0.7, 0.8);
-    sph5->name = "sph5";
 
-    Sphere *sph6 = new Sphere(Vec3f(9, -2, -8), 1);
+    Sphere *sph6 = new Sphere("sph6", Vec3f(9, -2, -8), 1);
     sph6->materialType = DIFFUSE_AND_GLOSSY;
     sph6->diffuseColor = Vec3f(0.6, 0.7, 0.8);
-    sph6->name = "sph6";
+*/
 
 /*
     Sphere *sph2 = new Sphere(Vec3f(-1, 0, -12), 2);
@@ -866,29 +1239,35 @@ int main(int argc, char **argv)
 */
     
     objects.push_back(std::unique_ptr<Sphere>(sph1));
+/*
     objects.push_back(std::unique_ptr<Sphere>(sph2));
     objects.push_back(std::unique_ptr<Sphere>(sph3));
     objects.push_back(std::unique_ptr<Sphere>(sph4));
     objects.push_back(std::unique_ptr<Sphere>(sph5));
     objects.push_back(std::unique_ptr<Sphere>(sph6));
+*/
 /*
     objects.push_back(std::unique_ptr<Sphere>(sph2));
     objects.push_back(std::unique_ptr<Sphere>(sph3));
 */
 
+/*
     //Vec3f verts[4] = {{-5,-3,-6}, {5,-3,-6}, {5,-3,-16}, {-5,-3,-16}};
     Vec3f verts[4] = {{-10,-3,-6}, {10,-3,-6}, {10,-3,-16}, {-10,-3,-16}};
     uint32_t vertIndex[6] = {0, 1, 3, 1, 2, 3};
     Vec2f st[4] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
-    MeshTriangle *mesh = new MeshTriangle(verts, vertIndex, 2, st);
+    MeshTriangle *mesh = new MeshTriangle("mesh1", verts, vertIndex, 2, st);
     mesh->materialType = DIFFUSE_AND_GLOSSY;
-    mesh->name = "mesh1";
     
     objects.push_back(std::unique_ptr<MeshTriangle>(mesh));
+*/
 
 //    lights.push_back(std::unique_ptr<Light>(new Light(Vec3f(-20, 70, 20), 0.5)));
-    lights.push_back(std::unique_ptr<Light>(new Light(Vec3f(30, 50, -12), 0.3)));
-    lights.push_back(std::unique_ptr<Light>(new Light(Vec3f(20, 50, -12), 0.3)));
+    lights.push_back(std::unique_ptr<Light>(new Light(Vec3f(1, 1, 10), 5)));
+//    lights.push_back(std::unique_ptr<Light>(new Light(Vec3f(-30, 50, 12), 5)));
+//    lights.push_back(std::unique_ptr<Light>(new Light(Vec3f(30, -50, -12), 5)));
+    //lights.push_back(std::unique_ptr<Light>(new Light(Vec3f(0, 0, -12), 5)));
+/*
     lights.push_back(std::unique_ptr<Light>(new Light(Vec3f(10, 50, -12), 0.3)));
     lights.push_back(std::unique_ptr<Light>(new Light(Vec3f(0, 50, -12), 0.3)));
     lights.push_back(std::unique_ptr<Light>(new Light(Vec3f(-10, 50, -12), 0.3)));
@@ -910,24 +1289,27 @@ int main(int argc, char **argv)
     lights.push_back(std::unique_ptr<Light>(new Light(Vec3f(-10, -50, -12), 0.3)));
     lights.push_back(std::unique_ptr<Light>(new Light(Vec3f(-20, -50, -12), 0.3)));
     lights.push_back(std::unique_ptr<Light>(new Light(Vec3f(-30, -50, -12), 0.3)));
+*/
+
     // setting up options
     Options options[100];
     std::memset(options, 0, sizeof(options));
     // no diffuse at all
     options[0].diffuseSpliter = 0;
-    options[0].maxDepth = 0;
+    options[0].maxDepth = 1;
     options[0].spp = 1;
     options[0].width = VIEW_WIDTH*options[0].spp;
     options[0].height = VIEW_HEIGHT*options[0].spp;
     options[0].fov = 90;
     //options[0].backgroundColor = Vec3f(0.235294, 0.67451, 0.843137);
     options[0].backgroundColor = Vec3f(0.0);
-    options[0].bias = 0.0001;
+    options[0].bias = 0.001;
     options[0].viewpoint = Vec3f(0.0);
     //Vec3f viewpoints[4] = {{0,0,0}, {0,0,1}, {1,1,1}, {6,6,1}};
 
+#if 0
     // 10 diffuse at each first hitpoint, no further diffuse
-    options[1].diffuseSpliter = 1;
+    options[1].diffuseSpliter = 0;
     options[1].maxDepth = 0;
     options[1].spp = 1;
     options[1].width = VIEW_WIDTH*options[1].spp;
@@ -991,6 +1373,8 @@ int main(int argc, char **argv)
     options[6].backgroundColor = Vec3f(0.0);
     options[6].bias = 0.0001;
     options[6].viewpoint = Vec3f(0.0);
+#endif
+
     // setting up ray store
     RayStore rayStore;
 
@@ -1000,18 +1384,33 @@ int main(int argc, char **argv)
                 "split", "depth", 
                 "origin", "reflect", "refract", "diffuse", 
                 "nohit", "invis", "overflow", "CPU(Rays)", "TIME(S)", "MEM(GB)");
+    time_t start, end;
     //std::printf("split\t depth\t total\t origin\t reflect\t refract\t diffuse\t nohit\t invis\t overflow\t CPUConsumed\n");
     for (int i =0; i<sizeof(options)/sizeof(struct Options); i++){
         if(options[i].width == 0) break;
+
+        // do prerender
+        std::memset(&rayStore, 0, sizeof(rayStore));
+        // caculate time consumed
+        start = time(NULL);
+        prerender(rayStore, options[i], objects, lights);
+        end = time(NULL);
+        std::printf("#%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
+                    options[i].diffuseSpliter, options[i].maxDepth,
+                    rayStore.originRays, rayStore.reflectionRays, rayStore.refractionRays, rayStore.diffuseRays,
+                    rayStore.nohitRays, rayStore.invisibleRays, rayStore.overflowRays, 
+                    rayStore.totalRays, difftime(end, start), rayStore.totalMem*1.0/(1024.0*1024.0*1024.0));
+
+
         std::memset(&rayStore, 0, sizeof(rayStore));
         std::sprintf(outfile,
             "map_x.%d_y.%d_z.%d_fov.%d_dep.%d_spp.%d_split.%d.ppm", (int)options[i].viewpoint.x,
             (int)options[i].viewpoint.y, (int)options[i].viewpoint.z, (int)options[i].fov, options[i].maxDepth, options[i].spp,
             options[i].diffuseSpliter);
         // caculate time consumed
-        time_t start, end;
         start = time(NULL);
         // finally, render
+        std::memset(&rayStore, 0, sizeof(rayStore));
         render(rayStore, outfile, options[i], objects, lights);
         end = time(NULL);
         std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
@@ -1033,8 +1432,8 @@ int main(int argc, char **argv)
     std::printf("Invalid rays reasons\n");
     for (uint32_t j = 0; j < options.height; ++j) {
         for (uint32_t i = 0; i < options.width; ++i) {
-            if(rayStore.origLink[i][j][0] != nullptr && rayStore.origLink[i][j][0]->hitObject != nullptr) {
-                std::printf("ray(%d,%d) hit object: %s\n", i, j, rayStore.origLink[i][j][0]->hitObject->name.c_str());
+            if(rayStore.origViewLink[i][j][0] != nullptr && rayStore.origViewLink[i][j][0]->hitObject != nullptr) {
+                std::printf("ray(%d,%d) hit object: %s\n", i, j, rayStore.origViewLink[i][j][0]->hitObject->name.c_str());
             }
         }
     }
