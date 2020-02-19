@@ -45,6 +45,9 @@
 
 #define VIEW_WIDTH  640
 #define VIEW_HEIGHT 480
+#define OVERSTACK_PROTECT_DEPTH 99 
+//#define INTENSITY_TOO_WEAK   0.000001*0.000001
+#define INTENSITY_TOO_WEAK   0.001*0.001
 const float kInfinity = std::numeric_limits<float>::max();
 
 class Vec3f {
@@ -234,7 +237,7 @@ public:
     Ray(const Vec3f &orig, const Vec3f &dir) : orig(orig), dir(dir){
         hitObject = nullptr;
         status = NOHIT_RAY;
-        validCount = nohitCount = invisibleCount = overflowCount = 0;
+        validCount = nohitCount = invisibleCount = overflowCount = weakCount = 0;
     }
     Vec3f orig;
     Vec3f dir;
@@ -259,6 +262,8 @@ public:
     uint32_t invisibleCount;
     // Counter of invalid rays as per overflow
     uint32_t overflowCount;
+    // Counter of too weak ingnored rays
+    uint32_t weakCount;
 };
 
 struct RayStore
@@ -768,7 +773,7 @@ Vec3f preCastRay(
     Ray * newRay = nullptr;
     Ray * currRay = nullptr;
 
-    if (depth > options.maxDepth) {
+    if (depth > OVERSTACK_PROTECT_DEPTH) {
         rayStore.overflowRays++;
         if(rayStore.currRay != nullptr) {
             rayStore.currRay->status = OVERFLOW_RAY;
@@ -920,10 +925,18 @@ Vec3f preCastRay(
             // how many diffuse relfect light will be traced
             uint32_t count = options.diffuseSpliter;
             // Prevent memory waste before overflow
-            if (depth+1 > options.maxDepth) {
+            if (depth+1 > OVERSTACK_PROTECT_DEPTH) {
                 rayStore.overflowRays += count;
                 if(rayStore.currRay != nullptr)
                     rayStore.currRay->overflowCount += count;
+            }
+            Vec3f leftIntensity = intensity*(1.0-kr)*(1.0/count);
+            float leftSqureValue = dotProduct(leftIntensity, leftIntensity);
+            if (leftSqureValue < INTENSITY_TOO_WEAK) {
+                rayStore.weakRays += count;
+                if(rayStore.currRay != nullptr)
+                    rayStore.currRay->weakCount += count;
+                break;
             }
             else {
                 for (uint32_t i=1; i<=count; i++) {
@@ -947,7 +960,7 @@ Vec3f preCastRay(
                         rayStore.currRay = newRay;
                     }
                     
-                    preCastRay(rayStore, reflectionRayOrig, reflectionDirection, objects, intensity*(1.0-kr)*(1.0/count), options, depth + 1);
+                    preCastRay(rayStore, reflectionRayOrig, reflectionDirection, objects, leftIntensity, options, depth + 1);
                     rayStore.currRay = currRay;
                 }
             }
@@ -1133,6 +1146,7 @@ Vec3f postCastRay(
                 // Loop over all lights in the scene and sum their contribution up
                 // We also apply the lambert cosine law here though we haven't explained yet what this means.
                 // [/comment]
+                Vec3f tmpAmt = 0;
                 for (uint32_t i = 0; i < lights.size(); ++i) {
                     Vec3f lightDir = lights[i]->position - hitPoint;
                     lightDir = normalize(lightDir);
@@ -1148,14 +1162,12 @@ Vec3f postCastRay(
                         // is the point in shadow, and is the nearest occluding object closer to the object than the light itself?
                         bool inShadow = trace(shadowPointOrig, lightDir, objects, tNearShadow, shadowHitPoint, shadowMapIdx, &shadowHitSurface, &shadowHitObject) &&
                             tNearShadow * tNearShadow < lightDistance2;
-    /*
-                        rayStore.diffuseRays++;
-                        rayStore.totalRays++;
-    */
+
+                        tmpAmt = (1 - inShadow) * lights[i]->intensity * LdotN * hitObject->Kd;
                         if (pDeltaAmt != nullptr)
-                            *pDeltaAmt += (1 - inShadow) * lights[i]->intensity * LdotN * hitObject->Kd;
+                            *pDeltaAmt += tmpAmt;
                         else
-                            localAmt += (1 - inShadow) * lights[i]->intensity * LdotN * hitObject->Kd;
+                            localAmt += tmpAmt;
                             
                     }
                     Vec3f reflectionDirection = reflect(-lightDir, N);
@@ -1165,15 +1177,11 @@ Vec3f postCastRay(
                     globalAmt = hitSurface->diffuseAmt;
                     localAmt = 0;
                 }
-/*
-                if (lightAmt == 0) rayStore.invisibleRays++;
+
+                if (tmpAmt == 0) rayStore.invisibleRays++;
                 else rayStore.validRays++;
-*/
-//#endif
-                //LEO: debug, donot caculate specular now.
-//                hitColor = (diffuseAmt + lightAmt) * hitObject->evalDiffuseColor(st) * hitObject->Kd;
+
                 hitColor = (globalAmt + localAmt) * hitObject->evalDiffuseColor(mapIdx) + specularColor * hitObject->Ks;
-                //hitColor = (lightAmt) * hitObject->evalDiffuseColor(st) * hitObject->Kd + specularColor * hitObject->Ks;
                 
                 break;
             }
@@ -1425,7 +1433,7 @@ int main(int argc, char **argv)
     Options options[100];
     std::memset(options, 0, sizeof(options));
     // no diffuse at all
-    options[0].diffuseSpliter = 100;
+    options[0].diffuseSpliter = 10;
     options[0].maxDepth = 1;
     options[0].spp = 1;
     options[0].width = VIEW_WIDTH*options[0].spp;
@@ -1510,10 +1518,10 @@ int main(int argc, char **argv)
 
     char outfile[256];
 
-    std::printf("%-10s %-10s %-10s %-10s %-10s %-10s %-10s %-10s %-10s %-10s %-10s %-10s\n", 
+    std::printf("%-10s %-10s %-10s %-10s %-10s %-10s %-10s %-10s %-10s %-10s %-10s %-10s %-10s\n", 
                 "split", "depth", 
                 "origin", "reflect", "refract", "diffuse", 
-                "nohit", "invis", "overflow", "CPU(Rays)", "TIME(S)", "MEM(GB)");
+                "nohit", "invis", "weak", "overflow", "CPU(Rays)", "TIME(S)", "MEM(GB)");
     time_t start, end;
     //std::printf("split\t depth\t total\t origin\t reflect\t refract\t diffuse\t nohit\t invis\t overflow\t CPUConsumed\n");
     for (int i =0; i<sizeof(options)/sizeof(struct Options); i++){
@@ -1526,10 +1534,10 @@ int main(int argc, char **argv)
         lightRender(rayStore, options[i], objects, lights);
         end = time(NULL);
         std::printf("###pre render from light###\n");
-        std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
+        std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
                     options[i].diffuseSpliter, options[i].maxDepth,
                     rayStore.originRays, rayStore.reflectionRays, rayStore.refractionRays, rayStore.diffuseRays,
-                    rayStore.nohitRays, rayStore.invisibleRays, rayStore.overflowRays, 
+                    rayStore.nohitRays, rayStore.invisibleRays, rayStore.weakRays, rayStore.overflowRays, 
                     rayStore.totalRays, difftime(end, start), rayStore.totalMem*1.0/(1024.0*1024.0*1024.0));
         
         // do post render from eyes after lightRender
@@ -1548,10 +1556,10 @@ int main(int argc, char **argv)
             /* start eyeRender after lightRender */
             eyeRender(rayStore, outfile, options[i], options[i].viewpoints[j], objects, lights, true);
             end = time(NULL);
-            std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
+            std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
                         options[i].diffuseSpliter, options[i].maxDepth,
                         rayStore.originRays, rayStore.reflectionRays, rayStore.refractionRays, rayStore.diffuseRays,
-                        rayStore.nohitRays, rayStore.invisibleRays, rayStore.overflowRays, 
+                        rayStore.nohitRays, rayStore.invisibleRays, rayStore.weakRays, rayStore.overflowRays, 
                         rayStore.totalRays, difftime(end, start), rayStore.totalMem*1.0/(1024.0*1024.0*1024.0));
 
             // (0,0,0) is the default viewpoint, and it means the end of the list
@@ -1575,10 +1583,10 @@ int main(int argc, char **argv)
             /* start eyeRender after lightRender */
             eyeRender(rayStore, outfile, options[i], options[i].viewpoints[j], objects, lights, false);
             end = time(NULL);
-            std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
+            std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
                         options[i].diffuseSpliter, options[i].maxDepth,
                         rayStore.originRays, rayStore.reflectionRays, rayStore.refractionRays, rayStore.diffuseRays,
-                        rayStore.nohitRays, rayStore.invisibleRays, rayStore.overflowRays, 
+                        rayStore.nohitRays, rayStore.invisibleRays, rayStore.weakRays, rayStore.overflowRays, 
                         rayStore.totalRays, difftime(end, start), rayStore.totalMem*1.0/(1024.0*1024.0*1024.0));
 
             // (0,0,0) is the default viewpoint, and it means the end of the list
