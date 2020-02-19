@@ -832,24 +832,6 @@ Vec3f preCastRay(
         }
 */
 
-/*
-    float kr;
-    fresnel(dir, hitSurface->N, hitObject->ior, kr);
-    if (intensity.x < 0 || intensity.y <0 || intensity.z < 0 || kr <0)
-        std::printf("ERROR: intensity=(%f,%f,%f), kr=%f\n", intensity.x, intensity.y, intensity.z, kr);
-    hitSurface->diffuseAmt += intensity * kr;
-*/
-    float kr = hitObject->Kd;
-    Vec3f lightDir = hitPoint - orig;
-    lightDir = normalize(lightDir);
-    float LdotN = std::max(0.f, dotProduct(-lightDir, hitSurface->N));
-    /* pre-caculate diffuse amt */
-    hitSurface->diffuseAmt += intensity * LdotN * kr;
-    /* pre-caculate specular amt */
-/*
-    Vec3f reflectionDirection = reflect(lightDir, hitSurface->N);
-    hitSurface->specularAmt += powf(std::max(0.f, -dotProduct(reflectionDirection, dir)), hitObject->specularExponent) * intensity;
-*/
 
     if(rayStore.currRay != nullptr) {
         rayStore.currRay->status = VALID_RAY;
@@ -861,6 +843,8 @@ Vec3f preCastRay(
     switch (hitObject->materialType) {
         case REFLECTION_AND_REFRACTION:
         {
+            float kr;
+            fresnel(dir, hitSurface->N, hitObject->ior, kr);
             Vec3f reflectionDirection = normalize(reflect(dir, hitSurface->N));
             Vec3f refractionDirection = normalize(refract(dir, hitSurface->N, hitObject->ior));
             Vec3f reflectionRayOrig = (dotProduct(reflectionDirection, hitSurface->N) < 0) ?
@@ -896,6 +880,8 @@ Vec3f preCastRay(
         }
         case REFLECTION:
         {
+            float kr;
+            fresnel(dir, hitSurface->N, hitObject->ior, kr);
             Vec3f reflectionDirection = reflect(dir, hitSurface->N);
             Vec3f reflectionRayOrig = (dotProduct(reflectionDirection, hitSurface->N) < 0) ?
                 hitPoint - hitSurface->N * options.bias :
@@ -915,6 +901,20 @@ Vec3f preCastRay(
         }
         default:
         {
+            /* pre-caculate diffuse amt */
+            float kr = hitObject->Kd;
+            Vec3f lightDir = hitPoint - orig;
+            lightDir = normalize(lightDir);
+            float LdotN = std::max(0.f, dotProduct(-lightDir, hitSurface->N));
+            if (intensity.x < 0 || intensity.y <0 || intensity.z < 0 || kr <0)
+                std::printf("ERROR: intensity=(%f,%f,%f), kr=%f\n", intensity.x, intensity.y, intensity.z, kr);
+            /* pre-caculate diffuse amt */
+            hitSurface->diffuseAmt += intensity * LdotN * kr;
+            /* pre-caculate specular amt */
+            /*
+            Vec3f reflectionDirection = reflect(lightDir, hitSurface->N);
+            hitSurface->specularAmt += powf(std::max(0.f, -dotProduct(reflectionDirection, dir)), hitObject->specularExponent) * intensity;
+            */
             // Diffuse relfect
             // each relfect light will share part of the light
             // how many diffuse relfect light will be traced
