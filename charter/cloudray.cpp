@@ -715,16 +715,12 @@ public:
 
     Vec3f evalDiffuseColor(const Vec2f &mapIdx) const
     {
-        if (materialType != DIFFUSE_AND_GLOSSY)
-            return Vec3f{0.3843, 0.3569, 0.3412};
-
-/*
-        else
-            return Vec3f(0.815, 0.235, 0.031);
-        float pattern = (fmodf(st.x * mapRatio, 1) > 0.5) ^ (fmodf(st.y * mapRatio, 1) > 0.5);
-*/
-        float pattern = (fmodf(mapIdx.x * mapRatio, 1) > 0.5) ^ (fmodf(mapIdx.y * mapRatio, 1) > 0.5);
-        return mix(Vec3f(0.815, 0.235, 0.031), Vec3f(0.937, 0.937, 0.231), pattern);
+        if (pureDiffuseColor == -1.) {
+            //float pattern = (fmodf(st.x * mapRatio, 1) > 0.5) ^ (fmodf(st.y * mapRatio, 1) > 0.5);
+            float pattern = (fmodf(mapIdx.x * mapRatio, 1) > 0.5) ^ (fmodf(mapIdx.y * mapRatio, 1) > 0.5);
+            return mix(Vec3f(0.815, 0.235, 0.031), Vec3f(0.937, 0.937, 0.231), pattern);
+        }
+        return pureDiffuseColor;
     }
 
     std::unique_ptr<Vec3f[]> vertices;
@@ -737,6 +733,7 @@ public:
     uint32_t ampRatio = 200;
     // the number point is vRes * hRes
     struct Surface * pSurfaces;
+    Vec3f  pureDiffuseColor = -1.;
 };
 
 // [comment]
@@ -1073,7 +1070,7 @@ Vec3f preCastRay(
                     rayStore.currRay->overflowCount += count;
             }
             //leftIntensity = intensity*(1.0-kr)*(1.0/(count+1));
-            leftIntensity = intensity*hitObject->Kd*(1.0/(100.));
+            leftIntensity = intensity*hitObject->Kd*(1.0/(count+1));
             float leftSqureValue = dotProduct(leftIntensity, leftIntensity);
             if (leftSqureValue < INTENSITY_TOO_WEAK) {
                 rayStore.weakRays ++;
@@ -1082,8 +1079,8 @@ Vec3f preCastRay(
                 break;
             }
             else {
-                //for (int32_t i=count*(-1./2); i<=count/2.; i+=1) {
-                for (uint32_t i=1; i<=count; i++) {
+                for (int32_t i=count*(-1./2); i<=count/2.; i+=1) {
+                //for (uint32_t i=1; i<=count; i++) {
                     Vec3f reflectionDirection = diffuse(dir, N, i*4.0/(count+1));
                     //Vec3f reflectionDirection = normalize(reflect(dir, N));
                     //Vec3f reflectionRayOrig = hitPoint + N * options.bias;
@@ -1091,11 +1088,6 @@ Vec3f preCastRay(
                     Vec3f reflectionRayOrig = insideObject ?
                         hitPoint - N * options.bias :
                         hitPoint + N * options.bias;
-/*
-                    Vec3f reflectionRayOrig = (dotProduct(reflectionDirection, N) > 0) ?
-                        hitPoint + N * options.bias :
-                        hitPoint - N * options.bias;
-*/
                     rayStore.diffuseRays++;
                     //std::printf("DEBUG--(%d, %d)-->Total rays(%d) = Origin rays(%d) + Reflection rays(%d) + Refraction rays(%d) + Diffuse rays(%d)\n", i, depth, rays.totalRays, rays.originRays, rays.reflectionRays, rays.refractionRays, rays.diffuseRays);
                     // tracker the ray
@@ -1296,13 +1288,13 @@ Vec3f postCastRay(
                     hitPoint + N * options.bias :
                     hitPoint - N * options.bias;
 
-                //if (!withLightRender)
-                if (false) {
+                if (!withLightRender) {
+                //if (false)
                     // Diffuse relfect
                     // each relfect light will share part of the light
                     // how many diffuse relfect light will be traced
                     uint32_t count = options.diffuseSpliter;
-                    float weight = 0.1/(count+1);
+                    float weight = 1./(count+1);
                     //float weight = 0.001;
                     hitColor = 0;
                     // Prevent memory waste before overflow
@@ -1312,15 +1304,13 @@ Vec3f postCastRay(
                             rayStore.currRay->overflowCount += count;
                     }
                     else {
-                        for (uint32_t i=1; i<=count; i++) {
-                            Vec3f reflectionDirection = diffuse(dir, N, i*3.0/count);
+                        //for (uint32_t i=1; i<=count; i++) {
+                        for (int32_t i=count*(-1./2); i<=count/2.; i+=1) {
+                            Vec3f reflectionDirection = diffuse(dir, N, i*4.0/count);
                             //Vec3f reflectionDirection = normalize(reflect(dir, N));
-                            Vec3f reflectionRayOrig = hitPoint + N * options.bias;
-                            /*
-                            Vec3f reflectionRayOrig = (dotProduct(reflectionDirection, N) > 0) ?
-                                hitPoint + N * options.bias :
-                                hitPoint - N * options.bias;
-                            */
+                            Vec3f reflectionRayOrig = (dotProduct(reflectionDirection, N) < 0) ?
+                                hitPoint - N * options.bias :
+                                hitPoint + N * options.bias;
                             rayStore.diffuseRays++;
                             //std::printf("DEBUG--(%d, %d)-->Total rays(%d) = Origin rays(%d) + Reflection rays(%d) + Refraction rays(%d) + Diffuse rays(%d)\n", i, depth, rays.totalRays, rays.originRays, rays.reflectionRays, rays.refractionRays, rays.diffuseRays);
                             // tracker the ray
@@ -1546,7 +1536,6 @@ int main(int argc, char **argv)
     std::vector<std::unique_ptr<Light>> lights;
     
     
-    //Sphere *sph1 = new Sphere("sph1", Vec3f(0, 0, -8), 2);
     Sphere *sph1 = new Sphere("sph1", Vec3f(-4, 0, -8), 2);
     sph1->ior = 1.3;
     sph1->Kd  = 0.8;
@@ -1604,15 +1593,29 @@ int main(int argc, char **argv)
     objects.push_back(std::unique_ptr<Sphere>(sph5));
     objects.push_back(std::unique_ptr<Sphere>(sph6));
 */
-    //Vec3f verts[4] = {{-5,-3,-6}, {5,-3,-6}, {5,-3,-16}, {-5,-3,-16}};
+
+/*
     Vec3f verts[4] = {{-10,-2,0}, {10,-2,0}, {10,-2,-14}, {-10,-2,-14}};
     uint32_t vertIndex[6] = {0, 1, 3, 1, 2, 3};
     Vec2f st[4] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
     MeshTriangle *mesh1 = new MeshTriangle("mesh1", verts, vertIndex, 2, st);
-//    mesh1->materialType = DIFFUSE_AND_GLOSSY;
     mesh1->ior = 1.5;
     mesh1->Kd  = 0.1;
     mesh1->materialType = REFLECTION;
+    mesh1->pureDiffuseColor = Vec3f{0.3843, 0.3569, 0.3412};
+    objects.push_back(std::unique_ptr<MeshTriangle>(mesh1));
+*/
+
+    Vec3f verts[4] = {{-10,-2,0}, {10,-2,0}, {10,-2,-14}, {-10,-2,-14}};
+    uint32_t vertIndex[6] = {0, 1, 3, 1, 2, 3};
+    Vec2f st[4] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+    MeshTriangle *mesh1 = new MeshTriangle("mesh1", verts, vertIndex, 2, st);
+    mesh1->materialType = REFLECTION;
+    //mesh1->materialType = DIFFUSE_AND_GLOSSY;
+    mesh1->ior = 1.5;
+    mesh1->Kd  = 0.1;
+    //mesh1->pureDiffuseColor = -1.;
+    mesh1->pureDiffuseColor = Vec3f{0.3843, 0.3569, 0.3412};
     objects.push_back(std::unique_ptr<MeshTriangle>(mesh1));
 
     
@@ -1621,10 +1624,11 @@ int main(int argc, char **argv)
     uint32_t vertIndex2[6] = {0, 1, 3, 1, 2, 3};
     Vec2f st2[4] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
     MeshTriangle *mesh2 = new MeshTriangle("mesh2", verts2, vertIndex2, 2, st2);
-    //mesh2->materialType = DIFFUSE_AND_GLOSSY;
+    //mesh2->materialType = REFLECTION;
+    mesh2->materialType = DIFFUSE_AND_GLOSSY;
     mesh2->ior = 1.3;
-    mesh2->Kd  = 0.1;
-    mesh2->materialType = REFLECTION;
+    mesh2->Kd  = 0.8;
+    //mesh2->pureDiffuseColor = Vec3f{0.3843, 0.3569, 0.3412};
     objects.push_back(std::unique_ptr<MeshTriangle>(mesh2));
 
 /*
@@ -1633,6 +1637,7 @@ int main(int argc, char **argv)
     Vec2f st3[4] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
     MeshTriangle *mesh3 = new MeshTriangle("mesh3", verts3, vertIndex3, 2, st3);
     mesh3->materialType = DIFFUSE_AND_GLOSSY;
+    mesh1->pureDiffuseColor = -1.; // use default diffuse color
     mesh3->ior = 1.3;
     mesh3->Kd  = 0.8;
     objects.push_back(std::unique_ptr<MeshTriangle>(mesh3));
@@ -1678,7 +1683,7 @@ int main(int argc, char **argv)
     Options options[100];
     std::memset(options, 0, sizeof(options));
     // no diffuse at all
-    options[0].diffuseSpliter = 10;
+    options[0].diffuseSpliter = 3;
     options[0].maxDepth = 5;
     options[0].spp = 1;
     options[0].width = VIEW_WIDTH*options[0].spp;
@@ -1690,11 +1695,10 @@ int main(int argc, char **argv)
     //options[0].bias = 0.001;
     options[0].bias = 0.001;
 
+    options[0].viewpoints[0] = Vec3f(0, 5, 0);
+    options[0].viewpoints[1] = Vec3f(-5, 0, -4);
+    //options[0].viewpoints[2] = Vec3f(5, 0, 0);
 /*
-    options[0].viewpoints[0] = Vec3f(0.1, 0, 0);
-    options[0].viewpoints[1] = Vec3f(0, 5, 0);
-    options[0].viewpoints[2] = Vec3f(0, 0, 10);
-    //options[0].viewpoints[3] = Vec3f(5, 0, 0);
     options[0].viewpoints[3] = Vec3f(2, 0, 0);
     options[0].viewpoints[4] = Vec3f(-2, 0, 0);
 */
@@ -1792,7 +1796,7 @@ int main(int argc, char **argv)
                     rayStore->nohitRays, rayStore->invisibleRays, rayStore->weakRays, rayStore->overflowRays, 
                     rayStore->totalRays, difftime(end, start), rayStore->totalMem*1.0/(1024.0*1024.0*1024.0));
 
-        rayStore->dumpLightTraceLink(0, 0, 0, 0);
+        //rayStore->dumpLightTraceLink(0, 0, 0, 0);
 
         delete rayStore;
         
@@ -1848,7 +1852,7 @@ int main(int argc, char **argv)
                         rayStore->nohitRays, rayStore->invisibleRays, rayStore->weakRays, rayStore->overflowRays, 
                         rayStore->totalRays, difftime(end, start), rayStore->totalMem*1.0/(1024.0*1024.0*1024.0));
 
-            rayStore->dumpEyeTraceLink(222, 340);
+            //rayStore->dumpEyeTraceLink(222, 340);
 
             delete rayStore;
             // (0,0,0) is the default viewpoint, and it means the end of the list
