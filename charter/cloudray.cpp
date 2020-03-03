@@ -191,22 +191,91 @@ struct SurfaceAngle {
 };
 
 // shade point on each object
-struct Surface {
+class Surface {
+public:
+    Surface(const float surfaceAngleRatio) : angleRatio(surfaceAngleRatio) {
+        /* caculate the hit angle refer to sphere Normal on the surface */
+        /* each surface will cast rays into a half sphere space which express as theta[0,90),phi[0,360) */
+        vAngleRes = (90.+1.)*angleRatio;
+        hAngleRes = (360.)*angleRatio;
+        if (angleRatio > 0.) {
+            MY_UINT64_T size = (MY_UINT64_T)sizeof(SurfaceAngle)*vAngleRes*hAngleRes;
+            angles = (SurfaceAngle *)malloc(size);
+            std::memset(angles, 0, size);
+        }
+    }
+    void reset(uint32_t index, Vec3f &normal) {
+        idx = index;
+        N = normal;
+        MY_UINT64_T size = (MY_UINT64_T)sizeof(SurfaceAngle)*vAngleRes*hAngleRes;
+        std::memset(angles, 0, size);
+    }
+
+    SurfaceAngle* getSurfaceAngleByVH(const uint32_t v, const uint32_t h, Vec3f * relPoint=nullptr) const
+    {
+        SurfaceAngle *angle = nullptr;
+        if(angles == nullptr) return angle;
+        angle = angles + v%vAngleRes*hAngleRes + h%hAngleRes;
+        if (relPoint != nullptr) {
+            float theta = v*90.0/vAngleRes;
+            float phi = h*360.0/hAngleRes;
+            assert (theta>=0. && theta<=90.);
+            assert (phi>=0. && phi<360.);
+            *relPoint = Vec3f(sin(phi)*sin(theta), cos(theta), cos(phi)*sin(theta));
+        }
+        return angle;
+    }    
+
+    SurfaceAngle* getSurfaceAngleByPolar(const float theta, const float phi) const
+    {
+        if(angles == nullptr) return nullptr;
+        /* caculate the hit angle refer to sphere Normal on the surface */
+        /* each surface will cast rays into a half sphere space which express as theta[0,90),phi[0,360) */
+        uint32_t v,h;
+        v = floor(theta/90.0*vAngleRes);
+        h = floor(phi/360.0*hAngleRes);
+        return angles + v*hAngleRes + h;
+    }
+
+    SurfaceAngle* getSurfaceAngleByDir(const Vec3f &dir) const
+    {
+        if(angles == nullptr) return nullptr;
+        /* caculate the hit angle refer to sphere Normal on the surface */
+        /* each surface will cast rays into a half sphere space which express as theta[0,90),phi[0,360) */
+        float thetaD = rad2deg(acos(-dir.y));
+        float phiD = rad2deg(atan2(-dir.x, -dir.z));
+        float thetaN = rad2deg(acos(N.y));
+        float phiN = rad2deg(atan2(N.x, N.z));
+        float theta = fabs(thetaD - thetaN);
+        float phi = 90.+(phiD - phiN);
+        if (phi < 0) phi += 360.;
+        /* caculate the hit angle refer to sphere Normal on the surface */
+        /* each surface will cast rays into a half sphere space which express as theta[0,90),phi[0,360) */
+        uint32_t v,h;
+        v = floor(theta/90.0*vAngleRes);
+        h = floor(phi/360.0*hAngleRes);
+        return angles + v*hAngleRes + h;
+    }
+
+    // there will be 90*angleRatio*360*angleRatio angles to cast rays
+    float angleRatio = 0.0;
+    uint32_t vAngleRes, hAngleRes;
+
     // hitColor = diffuseColor*diffuseAmt + specularColor * specularAmt;
     // diffuseAmt = SUM(diffuseAmt from each light)
     Vec3f diffuseAmt;
     // diffuseColor = hitObject->evalDiffuseColor(st)
-    Vec3f diffuseColor;
+    //Vec3f diffuseColor;
     // specularAmt = SUM(specularAmt from each light)
     // each light = powf(std::max(0.f, -dotProduct(reflectionDirection, dir)), hitObject->specularExponent) * lights[i]->intensity;
-    Vec3f specularAmt;
+    //Vec3f specularAmt;
     // now set it to hitObject->Ks;
-    Vec3f specularColor;
+    //Vec3f specularColor;
     Vec3f N; // normal
     /* TBD: index of current surface inside object, it can be caculated instead of using memory */
     uint32_t   idx;
     // store relfect and refract color to each angles
-    struct SurfaceAngle *angles;
+    struct SurfaceAngle *angles = nullptr;
 };
 
 
@@ -223,7 +292,6 @@ class Object
         vRes(0), hRes(0) {}
     virtual ~Object() {}
     virtual bool intersect(const Vec3f &, const Vec3f &, float &, Vec3f &, Vec2f &, Surface **, SurfaceAngle **) const = 0;
-    virtual Surface* getSurfaceProperties(const Vec3f &, const Vec3f &, const uint32_t &, const Vec2f &, Vec3f &, Vec2f &) const = 0;
     virtual Surface* getSurfaceByVH(const uint32_t &, const uint32_t &, Vec3f * =nullptr) const = 0;
     virtual Vec3f evalDiffuseColor(const Vec2f &) const { return diffuseColor; }
     virtual Vec3f pointRel2Abs(const Vec3f &) const =0;
@@ -281,27 +349,38 @@ class Object
         ofs.close();
     }
 
-    void allocAngleField(void)
+    void dumpSurfaceAngles(const Options &option) const
     {
-        if (pSurfaces == nullptr || surfaceAngleRatio == 0.)
-            return;
-        /* each surface will cast rays into a half sphere space which express as theta[0,90],phi[0,360) */
-        /* we use world space to save caculate, it will express as theta[0,180],phi[0,360) */
-        vAngleRes = (180.+1.)*surfaceAngleRatio;
-        hAngleRes = (360.)*surfaceAngleRatio;
-        MY_UINT64_T size = (MY_UINT64_T)sizeof(SurfaceAngle)*vAngleRes*vAngleRes;
-        pSurfaces->angles = (SurfaceAngle *)malloc(size);
-        std::memset(pSurfaces, 0, size);
-    }
-
-    SurfaceAngle* getSurfaceAngleByPolar(const float theta, const float phi) const
-    {
-        /* each surface will cast rays into a half sphere space which express as theta[0,90],phi[0,360) */
-        /* we use world space to save caculate, it will express as theta[0,180],phi[0,360) */
-        uint32_t v,h;
-        v = floor(theta/181.0*vRes);
-        h = floor(phi/360.0*hRes);
-        return pSurfaces->angles + v*hAngleRes + h;
+        char outfile[256];
+        std::sprintf(outfile,
+            "objangle[%s]_density.%.2f_dep.%d_spp.%d_split.%d.ppm", name.c_str(), RAY_CAST_DESITY, option.maxDepth, option.spp,
+            option.diffuseSpliter);
+        // save framebuffer to file
+        std::ofstream ofs;
+        /* text file for compare */
+        ofs.open(outfile);
+        ofs << "P3\n" << hRes << " " << vRes << "\n255\n";
+        Surface *curr;
+/*
+        for (uint32_t v = 0; v < vRes; ++v) {
+            for (uint32_t h = 0; h < hRes; ++h) {
+                curr = getSurfaceByVH(v, h);
+*/
+                curr = getSurfaceByVH(0, 0);
+                for (uint32_t vAngle=0; vAngle<curr->vAngleRes; vAngle++) {
+                    for (uint32_t hAngle=0; hAngle<curr->hAngleRes; hAngle++) {
+                        SurfaceAngle *angle = curr->getSurfaceAngleByVH(vAngle, hAngle);
+                        int r = (int)(255 * clamp(0, 1, angle->angleColor.x));
+                        int g = (int)(255 * clamp(0, 1, angle->angleColor.y));
+                        int b = (int)(255 * clamp(0, 1, angle->angleColor.z));
+                        ofs << r << " " << g << " " << b << "\n ";
+                    }
+                }
+/*
+            }
+        }
+*/
+        ofs.close();
     }
 
 
@@ -327,11 +406,11 @@ class Object
     bool recorderEnabled = false;
     // there will be vRes*ampRatio*hRes*ampRatio blocks of amp value
     float ampRatio = 1.0;
-    // the number point is vRes * hRes
-    struct Surface * pSurfaces;
-    // there will be 90*surfaceAngleRatio*360*surfaceAngleRatio angles to cast rays
+    // there will be vAngleRes*ampRatio*hAngleRes*ampRatio blocks of amp value
     float surfaceAngleRatio = 0.0;
-    uint32_t vAngleRes, hAngleRes;
+    // the number point is vRes * hRes
+    //struct Surface * pSurfaces;
+    std::vector<std::unique_ptr<Surface>> pSurfaces; 
     // the diffuse color the object by itself
     Vec3f  localDiffuseColor = -1.;
 };
@@ -500,40 +579,44 @@ public:
         switch (materialType) {
             case DIFFUSE_AND_GLOSSY:
                 ampRatio = ratio;
+                surfaceAngleRatio = 0.0;
                 break;
             default:
                 ampRatio = 4.*ratio;
+                surfaceAngleRatio = ratio;
+                break;
         }
         // vertical range is [0,180], horizon range is [0,360)
         uint32_t vRes = (180.+1.)*ampRatio*r, hRes = 360.*ampRatio*r;
         setType(OBJECT_TYPE_SPHERE);
         setName(name);
         setResolution(vRes, hRes);
-        MY_UINT64_T size = (MY_UINT64_T)sizeof(Surface) * vRes * hRes;
-        pSurfaces = (Surface *)malloc(size);
-        assert(pSurfaces != nullptr);
-        allocAngleField();
+        //MY_UINT64_T size = (MY_UINT64_T)sizeof(Surface) * vRes * hRes;
+        //pSurfaces = (Surface *)malloc(size);
+        for (uint32_t i=0; i<vRes*hRes; i++) {
+            Surface *surface = new Surface(surfaceAngleRatio);
+            pSurfaces.push_back(std::unique_ptr<Surface>(surface));
+        }
+
         std::printf("sphere:%s, %d (vRes:%d, hRes:%d)\n", name.c_str(), vRes*hRes, vRes, hRes);
         reset();
     }
     // store the pre-caculated shade value of each point
     void reset(void)
     {
-        uint32_t size = sizeof(Surface) * vRes * hRes;
         float theta, phi;
         Surface *curr;
-        std::memset(pSurfaces, 0, size);
         // DEBUG
         uint32_t idx = 0;
         for (uint32_t v = 0; v < vRes; ++v) {
             for (uint32_t h = 0; h < hRes; ++h) {
                 curr = getSurfaceByVH(v, h);
-                curr->idx = idx++;
                 // v(0, 1, 2, ... , 17) ==> theta(0, 10, 20, ..., 180)
                 // TBD: bugfix when v is 180, theta is only 180/181*180
                 theta = deg2rad(180.f * v/vRes);
                 phi = deg2rad(360.f * h/hRes);
-                curr->N = Vec3f(sin(phi)*sin(theta), cos(theta), cos(phi)*sin(theta));
+                Vec3f normal = Vec3f(sin(phi)*sin(theta), cos(theta), cos(phi)*sin(theta));
+                curr->reset(idx++, normal);
 /*
                 if (v >= 360 )
                     std::printf("&&&&v=%d, vRes=%d, theta=%f, N.y=%f\n",v, vRes, theta, curr->N.y);
@@ -565,15 +648,15 @@ public:
         uint32_t v,h;
         v = floor(theta/181.0*vRes);
         h = floor(phi/360.0*hRes);
+        Surface *pSurface = getSurfaceByVH(v, h);
         assert(surface != nullptr);
-        *surface = getSurfaceByVH(v, h);
+        *surface = pSurface;
         /* caculate the hit angle refer to sphere center on the surface */
-        /* each surface will cast rays into a half sphere space which express as theta[0,90],phi[0,360) */
-        /* we use world space to save caculate, it will express as theta[0,180],phi[0,360) */
-        theta = rad2deg(acos(dir.y));
-        phi = rad2deg(atan2(dir.x, dir.z));
         assert(angle != nullptr);
-        *angle = getSurfaceAngleByPolar(theta, phi);
+        if (pSurface != nullptr)
+            *angle = pSurface->getSurfaceAngleByDir(dir);
+        else
+            *angle = nullptr;
 
         return true;
     }
@@ -588,27 +671,14 @@ public:
         return (abs - center) * (1/radius);
     }
 
-    Surface* getSurfaceByVH(const uint32_t &v, const uint32_t &h, Vec3f *point = nullptr) const
+    Surface* getSurfaceByVH(const uint32_t &v, const uint32_t &h, Vec3f *worldPoint = nullptr) const
     {
         //assert( v < vRes && h < hRes);
         Surface *surface;
-        surface = pSurfaces + v%vRes*hRes + h%hRes;
-        if (surface != nullptr && point != nullptr)
-            *point = center + surface->N*radius;
+        surface = pSurfaces.at(v%vRes*hRes + h%hRes).get();
+        if (surface != nullptr && worldPoint != nullptr)
+            *worldPoint = center + surface->N*radius;
         return surface;
-    }
-
-    Surface* getSurfaceProperties(const Vec3f &P, const Vec3f &I, const uint32_t &index, const Vec2f &uv, Vec3f &N, Vec2f &st) const
-    { 
-        N = normalize(P - center);
-        /* caculate the shadepoint on the surface */
-        float theta = rad2deg(acos(N.y));
-        float phi = rad2deg(atan2(N.x, N.z));
-        if (phi < 0) phi += 360.0;
-        uint32_t v,h;
-        v = floor(theta/180.0*vRes);
-        h = floor(phi/360.0*hRes);
-        return pSurfaces + v*hRes + h;
     }
 
     Vec3f center;
@@ -658,9 +728,12 @@ public:
         switch (materialType) {
             case DIFFUSE_AND_GLOSSY:
                 ampRatio = ratio;
+                surfaceAngleRatio = 0.0;
                 break;
             default:
                 ampRatio = 2.*ratio;
+                surfaceAngleRatio = ratio;
+                break;
         }
         uint32_t maxIndex = 0;
         for (uint32_t i = 0; i < numTris * 3; ++i)
@@ -686,25 +759,27 @@ public:
         setType(OBJECT_TYPE_MESH);
         setName(name);
         setResolution(vRes, hRes);
-        MY_UINT64_T size = (MY_UINT64_T)sizeof(Surface) * vRes * hRes;
-        pSurfaces = (Surface *)malloc(size);
-        assert(pSurfaces != nullptr);
+        //MY_UINT64_T size = (MY_UINT64_T)sizeof(Surface) * vRes * hRes;
+        //pSurfaces = (Surface *)malloc(size);
+        for (uint32_t i=0; i<vRes*hRes; i++) {
+            pSurfaces.push_back(std::unique_ptr<Surface>(new Surface(surfaceAngleRatio)));
+        }
         reset();
     }
 
-    Surface* getSurfaceByVH(const uint32_t &v, const uint32_t &h, Vec3f *point = nullptr) const
+    Surface* getSurfaceByVH(const uint32_t &v, const uint32_t &h, Vec3f *worldPoint = nullptr) const
     {
         //assert( v < vRes && h < hRes);
         Surface *surface;
-        surface = pSurfaces + v%vRes*hRes + h%hRes;
-        if (surface != nullptr && point != nullptr) {
+        surface = pSurfaces.at(v%vRes*hRes + h%hRes).get();
+        if (surface != nullptr && worldPoint != nullptr) {
             const Vec3f &v0 = vertices[vertexIndex[0]];
             const Vec3f &v1 = vertices[vertexIndex[1]];
             const Vec3f &v2 = vertices[vertexIndex[2]];
             Vec3f e0 = (v1 - v0) * (1.0/hRes);
             Vec3f e1 = (v2 - v0) * (1.0/vRes);
-            *point = v0 + h*e0 + v*e1;
-            //std::printf("h/v(%d,%d), P(%f,%f,%f)\n", h, v, point->x, point->y, point->z);
+            *worldPoint = v0 + h*e0 + v*e1;
+            //std::printf("h/v(%d,%d), P(%f,%f,%f)\n", h, v, worldPoint->x, worldPoint->y, worldPoint->z);
         }
         return surface;
     }
@@ -714,7 +789,6 @@ public:
         uint32_t size = sizeof(Surface) * vRes * hRes;
         float theta, phi;
         Surface *curr;
-        std::memset(pSurfaces, 0, size);
 
         const Vec3f &v0 = vertices[vertexIndex[0]];
         const Vec3f &v1 = vertices[vertexIndex[1]];
@@ -727,8 +801,7 @@ public:
         for (uint32_t v = 0; v < vRes; ++v) {
             for (uint32_t h = 0; h < hRes; ++h) {
                 curr = getSurfaceByVH(v, h);
-                curr->idx = idx++;
-                curr->N = N;
+                curr->reset(idx++, N);
             }
         }
     }
@@ -759,16 +832,17 @@ public:
             Vec2f st = st0 * (1 - u - v) + st1 * u + st2 * v;
             point = orig + dir * tnear;
             assert ( 0 <= st.x <= 1.0 && 0 <= st.y <= 1.0);
-            *surface = getSurfaceByVH(floor(st.y*vRes), floor(st.x*hRes));
+            Surface *pSurface = getSurfaceByVH(floor(st.y*vRes), floor(st.x*hRes));
+            assert(surface != nullptr);
+            *surface = pSurface;
             /* set the bitmap index */
             mapIdx = st;
             /* caculate the hit angle refer to sphere center on the surface */
-            /* each surface will cast rays into a half sphere space which express as theta[0,90],phi[0,360) */
-            /* we use world space to save caculate, it will express as theta[0,180],phi[0,360) */
-            float theta = rad2deg(acos(dir.y));
-            float phi = rad2deg(atan2(dir.x, dir.z));
             assert(angle != nullptr);
-            *angle = getSurfaceAngleByPolar(theta, phi);
+            if (pSurface != nullptr)
+                *angle = pSurface->getSurfaceAngleByDir(dir);
+            else
+                *angle = nullptr;
         }
         return intersect;
     }
@@ -781,21 +855,6 @@ public:
     Vec3f pointAbs2Rel(const Vec3f &abs) const
     {
         return abs;
-    }
-
-    Surface * getSurfaceProperties(const Vec3f &P, const Vec3f &I, const uint32_t &index, const Vec2f &uv, Vec3f &N, Vec2f &st) const
-    {
-        const Vec3f &v0 = vertices[vertexIndex[index * 3]];
-        const Vec3f &v1 = vertices[vertexIndex[index * 3 + 1]];
-        const Vec3f &v2 = vertices[vertexIndex[index * 3 + 2]];
-        Vec3f e0 = normalize(v1 - v0);
-        Vec3f e1 = normalize(v2 - v1);
-        N = normalize(crossProduct(e0, e1));
-        const Vec2f &st0 = stCoordinates[vertexIndex[index * 3]];
-        const Vec2f &st1 = stCoordinates[vertexIndex[index * 3 + 1]];
-        const Vec2f &st2 = stCoordinates[vertexIndex[index * 3 + 2]];
-        st = st0 * (1 - uv.x - uv.y) + st1 * uv.x + st2 * uv.y;
-        return nullptr;
     }
 
     Vec3f evalDiffuseColor(const Vec2f &mapIdx) const
@@ -1251,6 +1310,7 @@ Vec3f backwardCastRay(
     SurfaceAngle *hitAngle = nullptr;
     Vec3f hitPoint = 0;
     Vec2f mapIdx = 0;
+    Vec3f globalAmt = 0, localAmt = 0, specularColor = 0;
     bool  insideObject = false;
     if (trace(orig, dir, objects, tnear, hitPoint, mapIdx, &hitSurface, &hitAngle, &hitObject)) {
         Vec3f N = hitSurface->N; // normal
@@ -1262,6 +1322,18 @@ Vec3f backwardCastRay(
             rayStore.currRay->hitObject = hitObject;
             rayStore.currRay->hitPoint = hitPoint;
         }
+
+        if (withLightRender) {
+            if (hitAngle == nullptr) {
+                globalAmt = hitSurface->diffuseAmt;
+                localAmt = 0;
+                hitColor = (globalAmt + localAmt) * hitObject->evalDiffuseColor(mapIdx) + specularColor * hitObject->Ks;
+            }
+            else
+                hitColor = hitAngle->angleColor;
+            return hitColor;
+        }
+
             
 /*
         if (rayStore.currPixel.x == 235. && rayStore.currPixel.y == 304.)
@@ -1343,7 +1415,6 @@ Vec3f backwardCastRay(
             }
             default:
             {
-                Vec3f globalAmt = 0, localAmt = 0, specularColor = 0;
                 // [comment]
                 // We use the Phong illumation model int the default case. The phong model
                 // is composed of a diffuse and a specular reflection component.
@@ -1460,7 +1531,6 @@ Vec3f backwardCastRay(
     return hitColor;
 }
 
-#if 0
 /* objectRender the object from Surface angles */
 void objectRender(
     RayStore &rayStore,
@@ -1471,48 +1541,41 @@ void objectRender(
     Object *targetObject;
     Surface *targetSurface;
     Vec3f   targetPoint;
-    Vec3f   testPoint;
-    Vec3f orig = 0;
+    Vec3f   dir = 0;
+    Vec3f   orig = 0;
     uint32_t v=0, h=0;
 
-        for (uint32_t i=0; i<objects.size(); i++) {
-            targetObject = objects[i].get();
-            for (v=0; v<objects[i]->vRes; v++) {
-                for (h=0; h<objects[i]->hRes; h++) {
-                targetSurface = targetObject->getSurfaceByVH(v, h, &targetPoint);
-                if (targetSurface == nullptr)
-                    continue;
-                // dir of forwordCastRay is relative to orig
-                // dir = center + P.rel(theta, phi)*radius - orig
-                // set the test point a little bit far away the center of sphere. test point is rel address from orig.
-                testPoint = targetPoint + targetSurface->N*options.bias - orig;
-            orig = lights[l]->position;
-                rayStore.originRays++;
-                // tracker the ray
-                if (objects[i]->recorderEnabled)
-                    rayStore.record(RAY_TYPE_ORIG, objects[i]->traceLinks, v*objects[i]->hRes + h, orig, testPoint);
-/*
-                assert( l < LIGHT_NUM_MAX && i < OBJ_NUM_MAX && v < V_RES_MAX && h < H_RES_MAX );
-                rayStore.record(RAY_TYPE_ORIG, rayStore.lightTraceLinks, 
-                                l*OBJ_NUM_MAX*V_RES_MAX*H_RES_MAX + i*V_RES_MAX*H_RES_MAX + v*H_RES_MAX + h,
-                                orig, testPoint);
-*/
-    /*
-                std::printf("v/h(%d,%d): targetPoint[%f,%f,%f], testPoint[%f,%f,%f]\n",
-                            v, h, targetPoint.x, targetPoint.y, targetPoint.z,
-                            testPoint.x,testPoint.y, testPoint.z);
-    */
-                rayStore.currPixel = {(float)v, (float)h, 0};
-                forwordCastRay(rayStore, orig, testPoint, objects, lights[l]->intensity, options, 0, targetObject, targetSurface, targetPoint);
-                //std::printf("light[%d]:%.0f%%\r",l, (h*vRes+v)*100.0/(vRes*hRes));
+    for (uint32_t i=0; i<objects.size(); i++) {
+        targetObject = objects[i].get();
+        if (targetObject->surfaceAngleRatio <= 0.) continue;
+        for (v=0; v<objects[i]->vRes; v++) {
+            for (h=0; h<objects[i]->hRes; h++) {
+                targetSurface = targetObject->getSurfaceByVH(v, h, &orig);
+                if (targetSurface == nullptr) continue;
+                for (uint32_t vAngle=0; vAngle<targetSurface->vAngleRes; vAngle++) {
+                    for (uint32_t hAngle=0; hAngle<targetSurface->hAngleRes; hAngle++) {
+                        SurfaceAngle *angle = targetSurface->getSurfaceAngleByVH(vAngle, hAngle, &dir);
+                        if (angle == nullptr) continue;
+                        // dir of forwordCastRay is relative to orig
+                        rayStore.originRays++;
+                        // tracker the ray
+                        /*
+                        if (objects[i]->recorderEnabled)
+                            rayStore.record(RAY_TYPE_ORIG, objects[i]->traceLinks, v*objects[i]->hRes + h, orig, dir);
+                        */
+                        rayStore.currPixel = {(float)v, (float)h, 0};
+                        angle->angleColor = backwardCastRay(rayStore, orig, dir, objects, lights, options, 0, false);
+                        //std::printf("light[%d]:%.0f%%\r",l, (h*vRes+v)*100.0/(vRes*hRes));
+                    }
                 }
+                // rayStore.dumpObjectTraceLink(objects, i, 0, 0);
+                // dump object shadepoint as ppm file
+                //objects[i]->dumpSurfaceAngles(options);
             }
-            rayStore.dumpObjectTraceLink(objects, i, 0, 0);
-            // dump object shadepoint as ppm file
-            objects[i]->dumpSurface(options);
         }
+        objects[i]->dumpSurfaceAngles(options);
+    }
 }
-#endif
 
 
 /* lightRender the object from light */
@@ -1528,12 +1591,6 @@ void lightRender(
     Vec3f   testPoint;
     Vec3f orig = 0;
     uint32_t v=0, h=0;
-
-/*
-    for (uint32_t i=0; i<objects.size(); i++) {
-        objects[i]->reset();
-    }
-*/
 
     for (uint32_t l=0; l<lights.size(); l++) {
         orig = lights[l]->position;
@@ -1806,7 +1863,6 @@ int main(int argc, char **argv)
         }
 
         // do lightRender
-        // std::memset(&rayStore, 0, sizeof(rayStore));
         // setting up ray store
         rayStore = new RayStore(options[i]);
         // caculate time consumed
@@ -1819,8 +1875,21 @@ int main(int argc, char **argv)
                     rayStore->originRays, rayStore->reflectionRays, rayStore->refractionRays, rayStore->diffuseRays,
                     rayStore->nohitRays, rayStore->invisibleRays, rayStore->weakRays, rayStore->overflowRays, 
                     rayStore->totalRays, difftime(end, start), rayStore->totalMem*1.0/(1024.0*1024.0*1024.0));
+        delete rayStore;
 
-
+        // do objectRender
+        // setting up ray store
+        rayStore = new RayStore(options[i]);
+        // caculate time consumed
+        start = time(NULL);
+        objectRender(*rayStore, options[i], objects, lights);
+        end = time(NULL);
+        std::printf("###pre render from object surface angle###\n");
+        std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
+                    options[i].diffuseSpliter, options[i].maxDepth,
+                    rayStore->originRays, rayStore->reflectionRays, rayStore->refractionRays, rayStore->diffuseRays,
+                    rayStore->nohitRays, rayStore->invisibleRays, rayStore->weakRays, rayStore->overflowRays, 
+                    rayStore->totalRays, difftime(end, start), rayStore->totalMem*1.0/(1024.0*1024.0*1024.0));
         delete rayStore;
         
         // do post render from eyes after lightRender
