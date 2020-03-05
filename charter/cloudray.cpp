@@ -18,6 +18,7 @@
 #include <string>
 #include <time.h>
 #include <assert.h>
+#include "geometry.h"
 
 #define MY_UINT64_T     uint64_t
 #define VIEW_WIDTH      640
@@ -42,6 +43,7 @@ enum RayType { RAY_TYPE_ORIG, RAY_TYPE_REFLECTION, RAY_TYPE_REFRACTION, RAY_TYPE
 char RayTypeString[10][20] = {"orig", "reflect", "refract", "diffuse"};
 
 
+/*
 class Vec3f {
 public:
     Vec3f() : x(0), y(0), z(0) {}
@@ -71,6 +73,7 @@ public:
     Vec2f operator + (const Vec2f &v) const { return Vec2f(x + v.x, y + v.y); }
     float x, y;
 };
+*/
 
 Vec3f normalize(const Vec3f &v)
 {
@@ -204,9 +207,10 @@ public:
             std::memset(angles, 0, size);
         }
     }
-    void reset(uint32_t index, Vec3f &normal) {
+    void reset(uint32_t index, Vec3f &normal, Vec3f center) {
         idx = index;
         N = normal;
+        local2World = Matrix44f(center, center+N);
         MY_UINT64_T size = (MY_UINT64_T)sizeof(SurfaceAngle)*vAngleRes*hAngleRes;
         std::memset(angles, 0, size);
     }
@@ -239,7 +243,12 @@ public:
 
     SurfaceAngle* getSurfaceAngleByDir(const Vec3f &dir) const
     {
+        Vec3f dirWorld;
         if(angles == nullptr) return nullptr;
+        local2World.multDirMatrix(dir, dirWorld);
+        float theta = rad2deg(acos(dirWorld.y));
+        float phi = rad2deg(atan2(dirWorld.x, dirWorld.z));
+#if 0
         /* caculate the hit angle refer to sphere Normal on the surface */
         /* each surface will cast rays into a half sphere space which express as theta[0,90),phi[0,360) */
         float thetaD = rad2deg(acos(-dir.y));
@@ -249,6 +258,7 @@ public:
         float theta = fabs(thetaD - thetaN);
         float phi = 90.+(phiD - phiN);
         if (phi < 0) phi += 360.;
+#endif
         /* caculate the hit angle refer to sphere Normal on the surface */
         /* each surface will cast rays into a half sphere space which express as theta[0,90),phi[0,360) */
         uint32_t v,h;
@@ -272,6 +282,8 @@ public:
     // now set it to hitObject->Ks;
     //Vec3f specularColor;
     Vec3f N; // normal
+    // Change local matrix system to world matrix system
+    Matrix44f local2World;
     /* TBD: index of current surface inside object, it can be caculated instead of using memory */
     uint32_t   idx;
     // store relfect and refract color to each angles
@@ -616,7 +628,8 @@ public:
                 theta = deg2rad(180.f * v/vRes);
                 phi = deg2rad(360.f * h/hRes);
                 Vec3f normal = Vec3f(sin(phi)*sin(theta), cos(theta), cos(phi)*sin(theta));
-                curr->reset(idx++, normal);
+                Vec3f surfaceCenter = center+normal*radius;
+                curr->reset(idx++, normal, surfaceCenter);
 /*
                 if (v >= 360 )
                     std::printf("&&&&v=%d, vRes=%d, theta=%f, N.y=%f\n",v, vRes, theta, curr->N.y);
@@ -654,7 +667,7 @@ public:
         /* caculate the hit angle refer to sphere center on the surface */
         assert(angle != nullptr);
         if (pSurface != nullptr)
-            *angle = pSurface->getSurfaceAngleByDir(dir);
+            *angle = pSurface->getSurfaceAngleByDir(-dir);
         else
             *angle = nullptr;
 
@@ -801,7 +814,8 @@ public:
         for (uint32_t v = 0; v < vRes; ++v) {
             for (uint32_t h = 0; h < hRes; ++h) {
                 curr = getSurfaceByVH(v, h);
-                curr->reset(idx++, N);
+                //TBD, LEO, center of a mesh is not v1 need to be justified, v1-(v2+v1)/2 ?
+                curr->reset(idx++, N, v1);
             }
         }
     }
@@ -840,7 +854,7 @@ public:
             /* caculate the hit angle refer to sphere center on the surface */
             assert(angle != nullptr);
             if (pSurface != nullptr)
-                *angle = pSurface->getSurfaceAngleByDir(dir);
+                *angle = pSurface->getSurfaceAngleByDir(-dir);
             else
                 *angle = nullptr;
         }
@@ -1283,6 +1297,7 @@ Vec3f backwardCastRay(
     const Options &options,
     uint32_t depth,
     bool withLightRender = false,
+    bool withObjectRender = false,
     Vec3f *pDeltaAmt = nullptr)
 {
 /*
@@ -1323,7 +1338,7 @@ Vec3f backwardCastRay(
             rayStore.currRay->hitPoint = hitPoint;
         }
 
-        if (withLightRender) {
+        if (withObjectRender) {
             if (hitAngle == nullptr) {
                 globalAmt = hitSurface->diffuseAmt;
                 localAmt = 0;
@@ -1456,7 +1471,7 @@ Vec3f backwardCastRay(
                                 rayStore.currRay = newRay;
                             }
                             Vec3f deltaAmt = 0;
-                            backwardCastRay(rayStore, reflectionRayOrig, reflectionDirection, objects, lights, options, depth + 1, false, &deltaAmt);
+                            backwardCastRay(rayStore, reflectionRayOrig, reflectionDirection, objects, lights, options, depth + 1, false, false, &deltaAmt);
                             rayStore.currRay = currRay;
                             globalAmt += deltaAmt * powf(weight, depth+1);
                         }
@@ -1564,7 +1579,7 @@ void objectRender(
                             rayStore.record(RAY_TYPE_ORIG, objects[i]->traceLinks, v*objects[i]->hRes + h, orig, dir);
                         */
                         rayStore.currPixel = {(float)v, (float)h, 0};
-                        angle->angleColor = backwardCastRay(rayStore, orig, dir, objects, lights, options, 0, false);
+                        angle->angleColor = backwardCastRay(rayStore, orig, dir, objects, lights, options, 0);
                         //std::printf("light[%d]:%.0f%%\r",l, (h*vRes+v)*100.0/(vRes*hRes));
                     }
                 }
@@ -1645,9 +1660,16 @@ void eyeRender(
     const Vec3f &viewpoint,
     const std::vector<std::unique_ptr<Object>> &objects,
     const std::vector<std::unique_ptr<Light>> &lights,
-    const bool withLightRender = false)
+    const bool withLightRender = false,
+    const bool withObjectRender = false)
 {
     Vec3f orig = viewpoint;
+    // change the camera to world
+#ifdef CAMERATOWORLD
+    Vec3f origWorld, dirWorld;
+    Matrix44f cameraToWorld(orig, orig+Vec3f{0.,0.,-1.});
+    std::cout << cameraToWorld << std::endl;
+#endif
     Vec3f *framebuffer = new Vec3f[options.width * options.height];
     Vec3f *pix = framebuffer;
     float scale = tan(deg2rad(options.fov * 0.5));
@@ -1664,7 +1686,14 @@ void eyeRender(
             // tracker the ray
             rayStore.record(RAY_TYPE_ORIG, rayStore.eyeTraceLinks, j*VIEW_WIDTH+i, orig, dir);
 
-            *(pix++) = backwardCastRay(rayStore, orig, dir, objects, lights, options, 0, withLightRender);
+#ifdef CAMERATOWORLD
+            cameraToWorld.multVecMatrix(orig, origWorld);
+            cameraToWorld.multDirMatrix(dir, dirWorld);
+            dirWorld.normalize();
+            *(pix++) = backwardCastRay(rayStore, origWorld, dirWorld, objects, lights, options, 0, withLightRender, withObjectRender);
+#else
+            *(pix++) = backwardCastRay(rayStore, orig, dir, objects, lights, options, 0, withLightRender, withObjectRender);
+#endif
             std::printf("%.0f%%\r",(j*options.width+i)*100.0/(options.width * options.height));
         }
         //std::printf("%f\r",(j*1.0/options.height));
@@ -1881,10 +1910,10 @@ int main(int argc, char **argv)
         // setting up ray store
         rayStore = new RayStore(options[i]);
         // caculate time consumed
+        std::printf("###pre render from object surface angle###\n");
         start = time(NULL);
         objectRender(*rayStore, options[i], objects, lights);
         end = time(NULL);
-        std::printf("###pre render from object surface angle###\n");
         std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
                     options[i].diffuseSpliter, options[i].maxDepth,
                     rayStore->originRays, rayStore->reflectionRays, rayStore->refractionRays, rayStore->diffuseRays,
@@ -1907,7 +1936,7 @@ int main(int argc, char **argv)
             // finally, eyeRender
             //std::memset(&rayStore, 0, sizeof(rayStore));
             /* start eyeRender after lightRender */
-            eyeRender(*rayStore, outfile, options[i], options[i].viewpoints[j], objects, lights, true);
+            eyeRender(*rayStore, outfile, options[i], options[i].viewpoints[j], objects, lights, true, true);
             end = time(NULL);
             std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
                         options[i].diffuseSpliter, options[i].maxDepth,
