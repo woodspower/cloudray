@@ -2,8 +2,8 @@
 ray tracing on the cloud
 
 # env setup
-
 prepare a windows destop, i.e. windows10
+
 prepare a linux server,   i.e. ubuntu 16.04
 
 
