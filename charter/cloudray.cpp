@@ -132,6 +132,9 @@ struct Options
     uint8_t maxDepth;
     Vec3f backgroundColor;
     float bias;
+    bool  doTraditionalRender;
+    bool  doRenderAfterDiffusePreprocess;
+    bool  doRenderAfterDiffuseAndReflectPreprocess;
     // a list of viewpoint to cast the original rays
     Vec3f viewpoints[100];
 };
@@ -1805,6 +1808,9 @@ int main(int argc, char **argv)
     //options[0].backgroundColor = Vec3f(0.0);
     //options[0].bias = 0.001;
     options[0].bias = 0.001;
+    options[0].doTraditionalRender = true;
+    options[0].doRenderAfterDiffusePreprocess = true;
+    options[0].doRenderAfterDiffuseAndReflectPreprocess = true;
 
     options[0].viewpoints[0] = Vec3f(0, 5, 0);
     options[0].viewpoints[1] = Vec3f(-5, 0, -4);
@@ -1896,94 +1902,130 @@ int main(int argc, char **argv)
             objects[i]->reset();
         }
 
-        // do lightRender
-        // setting up ray store
-        rayStore = new RayStore(options[i]);
-        // caculate time consumed
-        start = time(NULL);
-        lightRender(*rayStore, options[i], objects, lights);
-        end = time(NULL);
-        std::printf("###pre render from light###\n");
-        std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
-                    options[i].diffuseSpliter, options[i].maxDepth,
-                    rayStore->originRays, rayStore->reflectionRays, rayStore->refractionRays, rayStore->diffuseRays,
-                    rayStore->nohitRays, rayStore->invisibleRays, rayStore->weakRays, rayStore->overflowRays, 
-                    rayStore->totalRays, difftime(end, start), rayStore->totalMem*1.0/(1024.0*1024.0*1024.0));
-        delete rayStore;
-
-        // do objectRender
-        // setting up ray store
-        rayStore = new RayStore(options[i]);
-        // caculate time consumed
-        std::printf("###pre render from object surface angle###\n");
-        start = time(NULL);
-        objectRender(*rayStore, options[i], objects, lights);
-        end = time(NULL);
-        std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
-                    options[i].diffuseSpliter, options[i].maxDepth,
-                    rayStore->originRays, rayStore->reflectionRays, rayStore->refractionRays, rayStore->diffuseRays,
-                    rayStore->nohitRays, rayStore->invisibleRays, rayStore->weakRays, rayStore->overflowRays, 
-                    rayStore->totalRays, difftime(end, start), rayStore->totalMem*1.0/(1024.0*1024.0*1024.0));
-        delete rayStore;
-
-        // do post render from eyes after lightRender
-        // calcule all the viewpoints with same options 
-        std::printf("###post render from eye###\n");
-        for (int j =0; j<sizeof(options[i].viewpoints)/sizeof(Vec3f); j++) {
+        if (options[i].doRenderAfterDiffusePreprocess == true || options[i].doRenderAfterDiffuseAndReflectPreprocess == true) {
+            // do lightRender
+            // setting up ray store
             rayStore = new RayStore(options[i]);
-            //std::memset(&rayStore, 0, sizeof(rayStore));
-            std::sprintf(outfile,
-                "post_x.%d_y.%d_z.%d_density.%.2f_dep.%d_spp.%d_split.%d.ppm", (int)options[i].viewpoints[j].x,
-                (int)options[i].viewpoints[j].y, (int)options[i].viewpoints[j].z, RAY_CAST_DESITY, options[i].maxDepth, options[i].spp,
-                options[i].diffuseSpliter);
             // caculate time consumed
             start = time(NULL);
-            // finally, eyeRender
-            //std::memset(&rayStore, 0, sizeof(rayStore));
-            /* start eyeRender after lightRender */
-            eyeRender(*rayStore, outfile, options[i], options[i].viewpoints[j], objects, lights, true, false);
+            lightRender(*rayStore, options[i], objects, lights);
             end = time(NULL);
+            std::printf("###pre render for doRenderAfterDiffusePreprocess & doRenderAfterDiffuseAndReflectPreprocess from light###\n");
             std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
                         options[i].diffuseSpliter, options[i].maxDepth,
                         rayStore->originRays, rayStore->reflectionRays, rayStore->refractionRays, rayStore->diffuseRays,
                         rayStore->nohitRays, rayStore->invisibleRays, rayStore->weakRays, rayStore->overflowRays, 
                         rayStore->totalRays, difftime(end, start), rayStore->totalMem*1.0/(1024.0*1024.0*1024.0));
-
             delete rayStore;
-            // (0,0,0) is the default viewpoint, and it means the end of the list
-            if (options[i].viewpoints[j] == 0)
-                break;
+        }
+        if (options[i].doRenderAfterDiffusePreprocess == true) {
+            // do post render from eyes after lightRender
+            // calcule all the viewpoints with same options 
+            std::printf("###post render for doRenderAfterDiffusePreprocess###\n");
+            for (int j =0; j<sizeof(options[i].viewpoints)/sizeof(Vec3f); j++) {
+                rayStore = new RayStore(options[i]);
+                //std::memset(&rayStore, 0, sizeof(rayStore));
+                std::sprintf(outfile,
+                    "afterDiffusePreprocess_x.%d_y.%d_z.%d_density.%.2f_dep.%d_spp.%d_split.%d.ppm", (int)options[i].viewpoints[j].x,
+                    (int)options[i].viewpoints[j].y, (int)options[i].viewpoints[j].z, RAY_CAST_DESITY, options[i].maxDepth, options[i].spp,
+                    options[i].diffuseSpliter);
+                // caculate time consumed
+                start = time(NULL);
+                // finally, eyeRender
+                //std::memset(&rayStore, 0, sizeof(rayStore));
+                /* start eyeRender after lightRender */
+                eyeRender(*rayStore, outfile, options[i], options[i].viewpoints[j], objects, lights, true, false);
+                end = time(NULL);
+                std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
+                            options[i].diffuseSpliter, options[i].maxDepth,
+                            rayStore->originRays, rayStore->reflectionRays, rayStore->refractionRays, rayStore->diffuseRays,
+                            rayStore->nohitRays, rayStore->invisibleRays, rayStore->weakRays, rayStore->overflowRays, 
+                            rayStore->totalRays, difftime(end, start), rayStore->totalMem*1.0/(1024.0*1024.0*1024.0));
+
+                delete rayStore;
+                // (0,0,0) is the default viewpoint, and it means the end of the list
+                if (options[i].viewpoints[j] == 0)
+                    break;
+            }
         }
 
-        // do pure render from eyes without lightRender
-        // calcule all the viewpoints with same options 
-        std::printf("###single render from eye###\n");
-        for (int j =0; j<sizeof(options[i].viewpoints)/sizeof(Vec3f); j++) {
-            //std::memset(&rayStore, 0, sizeof(rayStore));
+        if (options[i].doRenderAfterDiffuseAndReflectPreprocess == true) {
+            // do objectRender
+            // setting up ray store
             rayStore = new RayStore(options[i]);
-            std::sprintf(outfile,
-                "single_x.%d_y.%d_z.%d_density.%.2f_dep.%d_spp.%d_split.%d.ppm", (int)options[i].viewpoints[j].x,
-                (int)options[i].viewpoints[j].y, (int)options[i].viewpoints[j].z, RAY_CAST_DESITY, options[i].maxDepth, options[i].spp,
-                options[i].diffuseSpliter);
             // caculate time consumed
+            std::printf("###pre render for doRenderAfterDiffuseAndReflectPreprocess from object surface angle###\n");
             start = time(NULL);
-            // finally, eyeRender
-            //std::memset(&rayStore, 0, sizeof(rayStore));
-            /* start eyeRender after lightRender */
-            eyeRender(*rayStore, outfile, options[i], options[i].viewpoints[j], objects, lights, false);
+            objectRender(*rayStore, options[i], objects, lights);
             end = time(NULL);
             std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
                         options[i].diffuseSpliter, options[i].maxDepth,
                         rayStore->originRays, rayStore->reflectionRays, rayStore->refractionRays, rayStore->diffuseRays,
                         rayStore->nohitRays, rayStore->invisibleRays, rayStore->weakRays, rayStore->overflowRays, 
                         rayStore->totalRays, difftime(end, start), rayStore->totalMem*1.0/(1024.0*1024.0*1024.0));
-
-            rayStore->dumpEyeTraceLink(222, 340);
-
             delete rayStore;
-            // (0,0,0) is the default viewpoint, and it means the end of the list
-            if (options[i].viewpoints[j] == 0)
-                break;
+
+            // do post render from eyes after lightRender
+            // calcule all the viewpoints with same options 
+            std::printf("###post render for doRenderAfterDiffuseAndReflectPreprocess###\n");
+            for (int j =0; j<sizeof(options[i].viewpoints)/sizeof(Vec3f); j++) {
+                rayStore = new RayStore(options[i]);
+                //std::memset(&rayStore, 0, sizeof(rayStore));
+                std::sprintf(outfile,
+                    "afterReflectPreprocess_x.%d_y.%d_z.%d_density.%.2f_dep.%d_spp.%d_split.%d.ppm", (int)options[i].viewpoints[j].x,
+                    (int)options[i].viewpoints[j].y, (int)options[i].viewpoints[j].z, RAY_CAST_DESITY, options[i].maxDepth, options[i].spp,
+                    options[i].diffuseSpliter);
+                // caculate time consumed
+                start = time(NULL);
+                // finally, eyeRender
+                //std::memset(&rayStore, 0, sizeof(rayStore));
+                /* start eyeRender after lightRender */
+                eyeRender(*rayStore, outfile, options[i], options[i].viewpoints[j], objects, lights, true, true);
+                end = time(NULL);
+                std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
+                            options[i].diffuseSpliter, options[i].maxDepth,
+                            rayStore->originRays, rayStore->reflectionRays, rayStore->refractionRays, rayStore->diffuseRays,
+                            rayStore->nohitRays, rayStore->invisibleRays, rayStore->weakRays, rayStore->overflowRays, 
+                            rayStore->totalRays, difftime(end, start), rayStore->totalMem*1.0/(1024.0*1024.0*1024.0));
+
+                delete rayStore;
+                // (0,0,0) is the default viewpoint, and it means the end of the list
+                if (options[i].viewpoints[j] == 0)
+                    break;
+            }
+        }
+
+        if (options[i].doTraditionalRender == true) {
+            // do pure render from eyes without lightRender
+            // calcule all the viewpoints with same options 
+            std::printf("###traditional render from eye###\n");
+            for (int j =0; j<sizeof(options[i].viewpoints)/sizeof(Vec3f); j++) {
+                //std::memset(&rayStore, 0, sizeof(rayStore));
+                rayStore = new RayStore(options[i]);
+                std::sprintf(outfile,
+                    "traditional_x.%d_y.%d_z.%d_density.%.2f_dep.%d_spp.%d_split.%d.ppm", (int)options[i].viewpoints[j].x,
+                    (int)options[i].viewpoints[j].y, (int)options[i].viewpoints[j].z, RAY_CAST_DESITY, options[i].maxDepth, options[i].spp,
+                    options[i].diffuseSpliter);
+                // caculate time consumed
+                start = time(NULL);
+                // finally, eyeRender
+                //std::memset(&rayStore, 0, sizeof(rayStore));
+                /* start eyeRender after lightRender */
+                eyeRender(*rayStore, outfile, options[i], options[i].viewpoints[j], objects, lights, false, false);
+                end = time(NULL);
+                std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
+                            options[i].diffuseSpliter, options[i].maxDepth,
+                            rayStore->originRays, rayStore->reflectionRays, rayStore->refractionRays, rayStore->diffuseRays,
+                            rayStore->nohitRays, rayStore->invisibleRays, rayStore->weakRays, rayStore->overflowRays, 
+                            rayStore->totalRays, difftime(end, start), rayStore->totalMem*1.0/(1024.0*1024.0*1024.0));
+
+                rayStore->dumpEyeTraceLink(222, 340);
+
+                delete rayStore;
+                // (0,0,0) is the default viewpoint, and it means the end of the list
+                if (options[i].viewpoints[j] == 0)
+                    break;
+            }
         }
     }
 
