@@ -210,7 +210,9 @@ public:
     void reset(uint32_t index, Vec3f &normal, Vec3f center) {
         idx = index;
         N = normal;
-        local2World = Matrix44f(center, center+N);
+        //local2World = Matrix44f(center, center+N);
+        local2World = Matrix44f(center+N, center);
+        //std::cout << center << center+N << std::endl;
         MY_UINT64_T size = (MY_UINT64_T)sizeof(SurfaceAngle)*vAngleRes*hAngleRes;
         std::memset(angles, 0, size);
     }
@@ -225,7 +227,10 @@ public:
             float phi = h*360.0/hAngleRes;
             assert (theta>=0. && theta<=90.);
             assert (phi>=0. && phi<360.);
-            *relPoint = Vec3f(sin(phi)*sin(theta), cos(theta), cos(phi)*sin(theta));
+            // modified by xinhou @20200205
+            //*relPoint = Vec3f(sin(phi)*sin(theta), cos(theta), cos(phi)*sin(theta));
+            Vec3f relPointN = Vec3f(sin(phi)*sin(theta), cos(theta), cos(phi)*sin(theta));
+            local2World.multDirMatrix(relPointN, *relPoint);
         }
         return angle;
     }    
@@ -1920,7 +1925,7 @@ int main(int argc, char **argv)
                     rayStore->nohitRays, rayStore->invisibleRays, rayStore->weakRays, rayStore->overflowRays, 
                     rayStore->totalRays, difftime(end, start), rayStore->totalMem*1.0/(1024.0*1024.0*1024.0));
         delete rayStore;
-        
+
         // do post render from eyes after lightRender
         // calcule all the viewpoints with same options 
         std::printf("###post render from eye###\n");
@@ -1936,7 +1941,7 @@ int main(int argc, char **argv)
             // finally, eyeRender
             //std::memset(&rayStore, 0, sizeof(rayStore));
             /* start eyeRender after lightRender */
-            eyeRender(*rayStore, outfile, options[i], options[i].viewpoints[j], objects, lights, true, true);
+            eyeRender(*rayStore, outfile, options[i], options[i].viewpoints[j], objects, lights, true, false);
             end = time(NULL);
             std::printf("%-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10u %-10.0f %-10.2f\n",
                         options[i].diffuseSpliter, options[i].maxDepth,
