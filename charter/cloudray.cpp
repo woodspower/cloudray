@@ -213,8 +213,11 @@ public:
     void reset(uint32_t index, Vec3f &normal, Vec3f center) {
         idx = index;
         N = normal;
-        //local2World = Matrix44f(center, center+N);
-        local2World = Matrix44f(center+N, center);
+        if (angleRatio > 0.0) {
+            local2World = Matrix44f(center, center+N);
+            world2Local = local2World.inverse();
+            //std::cout << center << normal << std::endl << local2World << std::endl;
+        }
         //std::cout << center << center+N << std::endl;
         MY_UINT64_T size = (MY_UINT64_T)sizeof(SurfaceAngle)*vAngleRes*hAngleRes;
         std::memset(angles, 0, size);
@@ -234,6 +237,10 @@ public:
             //*relPoint = Vec3f(sin(phi)*sin(theta), cos(theta), cos(phi)*sin(theta));
             Vec3f relPointN = Vec3f(sin(phi)*sin(theta), cos(theta), cos(phi)*sin(theta));
             local2World.multDirMatrix(relPointN, *relPoint);
+/*
+            if (relPointN != *relPoint)
+                std::cout << relPointN << *relPoint << std::endl << local2World << std::endl;
+*/
         }
         return angle;
     }    
@@ -253,7 +260,7 @@ public:
     {
         Vec3f dirWorld;
         if(angles == nullptr) return nullptr;
-        local2World.multDirMatrix(dir, dirWorld);
+        world2Local.multDirMatrix(dir, dirWorld);
         float theta = rad2deg(acos(dirWorld.y));
         float phi = rad2deg(atan2(dirWorld.x, dirWorld.z));
 #if 0
@@ -292,6 +299,7 @@ public:
     Vec3f N; // normal
     // Change local matrix system to world matrix system
     Matrix44f local2World;
+    Matrix44f world2Local;
     /* TBD: index of current surface inside object, it can be caculated instead of using memory */
     uint32_t   idx;
     // store relfect and refract color to each angles
@@ -819,11 +827,12 @@ public:
         Vec3f N = normalize(crossProduct(e0, e1));
 
         uint32_t idx = 0;
+        Vec3f center;
         for (uint32_t v = 0; v < vRes; ++v) {
             for (uint32_t h = 0; h < hRes; ++h) {
-                curr = getSurfaceByVH(v, h);
+                curr = getSurfaceByVH(v, h, &center);
                 //TBD, LEO, center of a mesh is not v1 need to be justified, v1-(v2+v1)/2 ?
-                curr->reset(idx++, N, v1);
+                curr->reset(idx++, N, center);
             }
         }
     }
@@ -1446,8 +1455,8 @@ Vec3f backwardCastRay(
                     hitPoint + N * options.bias :
                     hitPoint - N * options.bias;
 
-                if (!withLightRender) {
-                //if (false)
+                if (false) {
+                //if (!withLightRender) {
                     // Diffuse relfect
                     // each relfect light will share part of the light
                     // how many diffuse relfect light will be traced
@@ -1588,7 +1597,7 @@ void objectRender(
                         */
                         rayStore.currPixel = {(float)v, (float)h, 0};
                         angle->angleColor = backwardCastRay(rayStore, orig, dir, objects, lights, options, 0);
-                        //std::printf("light[%d]:%.0f%%\r",l, (h*vRes+v)*100.0/(vRes*hRes));
+                        std::cout << angle->angleColor <<  std::endl;
                     }
                 }
                 // rayStore.dumpObjectTraceLink(objects, i, 0, 0);
@@ -1760,12 +1769,14 @@ int main(int argc, char **argv)
     objects.push_back(std::unique_ptr<Sphere>(sph1));
 
 
+/*
     Sphere *sph2 = new Sphere("sph2", REFLECTION_AND_REFRACTION, Vec3f(4, 0, -8), 2);
     sph2->ior = 1.7;
     sph2->Kd  = 0.0;
     sph2->diffuseColor = Vec3f(0.6, 0.7, 0.8);
     //sph2->enableRecorder();
     objects.push_back(std::unique_ptr<Sphere>(sph2));
+*/
 
 
     Vec3f verts[4] = {{-10,-2,0}, {10,-2,0}, {10,-2,-14}, {-10,-2,-14}};
@@ -1808,7 +1819,7 @@ int main(int argc, char **argv)
     //options[0].backgroundColor = Vec3f(0.0);
     //options[0].bias = 0.001;
     options[0].bias = 0.001;
-    options[0].doTraditionalRender = true;
+    options[0].doTraditionalRender = false;
     options[0].doRenderAfterDiffusePreprocess = true;
     options[0].doRenderAfterDiffuseAndReflectPreprocess = true;
 

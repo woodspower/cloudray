@@ -96,6 +96,7 @@ public:
     Vec3 operator / (const T &r) const
     { return Vec3(x / r, y / r, z / r); }
     bool operator == (const T xx) const { return (x==xx && y==xx && z==xx); }
+    bool operator != (const Vec3 &v) const { return (x!=v.x || y!=v.y || z!=v.z); }
     
     Vec3& operator /= (const T &r)
     { x /= r, y /= r, z /= r; return *this; }
@@ -170,9 +171,9 @@ public:
     Matrix44() {}
 
     // Leo: create a matrix by using lookat function
-    Matrix44(const Vec3f& from, const Vec3f& to, const Vec3f& tmp = Vec3f(0, 0, 1)) 
+    Matrix44(const Vec3f& from, const Vec3f& to, const Vec3f& tmp = Vec3f(1, 0, 0)) 
     { 
-        Vec3f up = (from - to); 
+        Vec3f up = (to - from); 
         up = up.normalize();
         Vec3f forward = tmp.crossProduct(up);
         Vec3f right = up.crossProduct(forward); 
