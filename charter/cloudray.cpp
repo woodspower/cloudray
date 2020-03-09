@@ -235,7 +235,8 @@ public:
             assert (phi>=0. && phi<360.);
             // modified by xinhou @20200205
             //*relPoint = Vec3f(sin(phi)*sin(theta), cos(theta), cos(phi)*sin(theta));
-            Vec3f relPointN = Vec3f(sin(phi)*sin(theta), cos(theta), cos(phi)*sin(theta));
+            //Vec3f relPointN = Vec3f(sin(phi)*sin(theta), cos(theta), cos(phi)*sin(theta));
+            Vec3f relPointN = Vec3f(cos(phi)*sin(theta), cos(theta), sin(phi)*sin(theta));
             local2World.multDirMatrix(relPointN, *relPoint);
 /*
             if (relPointN != *relPoint)
@@ -262,7 +263,8 @@ public:
         if(angles == nullptr) return nullptr;
         world2Local.multDirMatrix(dir, dirWorld);
         float theta = rad2deg(acos(dirWorld.y));
-        float phi = rad2deg(atan2(dirWorld.x, dirWorld.z));
+        //float phi = rad2deg(atan2(dirWorld.x, dirWorld.z));
+        float phi = rad2deg(atan2(dirWorld.z, dirWorld.x));
 #if 0
         /* caculate the hit angle refer to sphere Normal on the surface */
         /* each surface will cast rays into a half sphere space which express as theta[0,90),phi[0,360) */
@@ -645,7 +647,8 @@ public:
                 // TBD: bugfix when v is 180, theta is only 180/181*180
                 theta = deg2rad(180.f * v/vRes);
                 phi = deg2rad(360.f * h/hRes);
-                Vec3f normal = Vec3f(sin(phi)*sin(theta), cos(theta), cos(phi)*sin(theta));
+                //Vec3f normal = Vec3f(sin(phi)*sin(theta), cos(theta), cos(phi)*sin(theta));
+                Vec3f normal = Vec3f(cos(phi)*sin(theta), cos(theta), sin(phi)*sin(theta));
                 Vec3f surfaceCenter = center+normal*radius;
                 curr->reset(idx++, normal, surfaceCenter);
 /*
@@ -672,7 +675,8 @@ public:
         Vec3f N = normalize(point - center);
         /* caculate the hit point refer to sphere center on the surface */
         float theta = rad2deg(acos(N.y));
-        float phi = rad2deg(atan2(N.x, N.z));
+        //float phi = rad2deg(atan2(N.x, N.z));
+        float phi = rad2deg(atan2(N.z, N.x));
         /* set the bitmap index */
         mapIdx.x = theta;
         mapIdx.y = phi;
