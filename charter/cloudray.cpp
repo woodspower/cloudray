@@ -21,8 +21,8 @@
 #include "geometry.h"
 
 #define MY_UINT64_T     uint64_t
-#define VIEW_WIDTH      400 //640
-#define VIEW_HEIGHT     196 //480
+#define VIEW_WIDTH      640
+#define VIEW_HEIGHT     480
 #define RAY_CAST_DESITY 1.
 /*
 #define LIGHT_NUM_MAX 3
@@ -767,7 +767,7 @@ public:
                 break;
             default:
                 //ampRatio = 2.*ratio;
-                ampRatio = 0.25*ratio;
+                ampRatio = 1.*ratio;
                 surfaceAngleRatio = 0.1*ratio;
                 break;
         }
@@ -1353,6 +1353,7 @@ Vec3f backwardCastRay(
     bool  insideObject = false;
     if (trace(orig, dir, objects, tnear, hitPoint, mapIdx, &hitSurface, &hitAngle, &hitObject)) {
         Vec3f N = hitSurface->N; // normal
+//        std::printf("%*s%d hit[%s]:\n", depth+1, "#", depth+1, hitObject->name.c_str());
 //        Vec3f testColor = hitObject->evalDiffuseColor(mapIdx);
 //        std::printf("#hitPoint(%f, %f, %f), color(%f, %f, %f) \n", hitPoint.x, hitPoint.y, hitPoint.z, testColor.x, testColor.y, testColor.z);
         if(rayStore.currRay != nullptr) {
@@ -1561,6 +1562,7 @@ Vec3f backwardCastRay(
     }
     else {
         rayStore.nohitRays++;
+        //std::printf("%*s%d nohit\n", depth+1, "#", depth+1);
         if(rayStore.currRay != nullptr) {
             rayStore.currRay->status = NOHIT_RAY;
             rayStore.currRay->nohitCount++;
@@ -1579,7 +1581,7 @@ void objectRender(
 {
     Object *targetObject;
     Surface *targetSurface;
-    Vec3f   targetPoint;
+    Vec3f   target;
     Vec3f   dir = 0;
     Vec3f   orig = 0;
     uint32_t v=0, h=0;
@@ -1605,7 +1607,7 @@ void objectRender(
         if (targetObject->surfaceAngleRatio <= 0.) continue;
         for (v=0; v<objects[i]->vRes; v++) {
             for (h=0; h<objects[i]->hRes; h++) {
-                targetSurface = targetObject->getSurfaceByVH(v, h, &orig);
+                targetSurface = targetObject->getSurfaceByVH(v, h, &target);
                 if (targetSurface == nullptr) continue;
                 for (uint32_t vAngle=0; vAngle<targetSurface->vAngleRes; vAngle++) {
                     for (uint32_t hAngle=0; hAngle<targetSurface->hAngleRes; hAngle++) {
@@ -1618,13 +1620,14 @@ void objectRender(
                         if (objects[i]->recorderEnabled)
                             rayStore.record(RAY_TYPE_ORIG, objects[i]->traceLinks, v*objects[i]->hRes + h, orig, dir);
                         */
+                        orig = target + dir;
                         rayStore.currPixel = {(float)v, (float)h, 0};
-                        angle->angleColor = backwardCastRay(rayStore, orig, dir, objects, lights, options, 0);
+                        angle->angleColor = backwardCastRay(rayStore, orig, -dir, objects, lights, options, 0);
                         //std::cout << angle->angleColor <<  std::endl;
 
                         // LEO: debug a angle color
                         //if (v != currV || h!= currH) {
-                        Vec3f debugDir = normalize(Vec3f(0) - orig);
+                        Vec3f debugDir = normalize(Vec3f(0) - target);
         //                Vec3f delta = debugDir - dir;
 #if 0
                         std::cout << "===" << v << "," << h << "," << vAngle << "," << hAngle << delta << "===" << std::endl;
