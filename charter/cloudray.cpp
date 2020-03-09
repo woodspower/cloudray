@@ -625,12 +625,17 @@ public:
         setResolution(vRes, hRes);
         //MY_UINT64_T size = (MY_UINT64_T)sizeof(Surface) * vRes * hRes;
         //pSurfaces = (Surface *)malloc(size);
+        uint32_t vAngleRes = 0;
+        uint32_t hAngleRes = 0;
         for (uint32_t i=0; i<vRes*hRes; i++) {
             Surface *surface = new Surface(surfaceAngleRatio);
             pSurfaces.push_back(std::unique_ptr<Surface>(surface));
+            if (vAngleRes < surface->vAngleRes) vAngleRes = surface->vAngleRes;
+            if (hAngleRes < surface->hAngleRes) hAngleRes = surface->hAngleRes;
         }
-
-        std::printf("sphere:%s, %d (vRes:%d, hRes:%d)\n", name.c_str(), vRes*hRes, vRes, hRes);
+        uint64_t raysNum = vRes*hRes + vRes*hRes*vAngleRes*hAngleRes;
+        std::printf("sphere:%s, shadePoint:%d (vRes:%d, hRes:%d), pointAngle:%d (vAngle:%d, hAngle:%d), rays:%lu\n", 
+                    name.c_str(), vRes*hRes, vRes, hRes, vAngleRes*hAngleRes, vAngleRes, hAngleRes, raysNum);
         reset();
     }
     // store the pre-caculated shade value of each point
@@ -791,16 +796,24 @@ public:
 
         uint32_t vRes = (uint32_t)(ampRatio * dotProduct(e0, e0));
         uint32_t hRes = (uint32_t)(ampRatio * dotProduct(e1, e1));
-        std::printf("mesh:%s, %d (vRes:%d, hRes:%d)\n", name.c_str(), vRes*hRes, vRes, hRes);
         setType(OBJECT_TYPE_MESH);
         setName(name);
         setResolution(vRes, hRes);
         //MY_UINT64_T size = (MY_UINT64_T)sizeof(Surface) * vRes * hRes;
         //pSurfaces = (Surface *)malloc(size);
+        uint32_t vAngleRes = 0;
+        uint32_t hAngleRes = 0;
         for (uint32_t i=0; i<vRes*hRes; i++) {
-            pSurfaces.push_back(std::unique_ptr<Surface>(new Surface(surfaceAngleRatio)));
+            Surface *surface = new Surface(surfaceAngleRatio);
+            pSurfaces.push_back(std::unique_ptr<Surface>(surface));
+            if (vAngleRes < surface->vAngleRes) vAngleRes = surface->vAngleRes;
+            if (hAngleRes < surface->hAngleRes) hAngleRes = surface->hAngleRes;
         }
         reset();
+
+        uint64_t raysNum = vRes*hRes + vRes*hRes*vAngleRes*hAngleRes;
+        std::printf("mesh:%s, shadePoint:%d (vRes:%d, hRes:%d), pointAngle:%d (vAngle:%d, hAngle:%d), rays:%lu\n", 
+                    name.c_str(), vRes*hRes, vRes, hRes, vAngleRes*hAngleRes, vAngleRes, hAngleRes, raysNum);
     }
 
     Surface* getSurfaceByVH(const uint32_t &v, const uint32_t &h, Vec3f *worldPoint = nullptr) const
