@@ -97,6 +97,7 @@ public:
     { return Vec3(x / r, y / r, z / r); }
     bool operator == (const T xx) const { return (x==xx && y==xx && z==xx); }
     bool operator != (const Vec3 &v) const { return (x!=v.x || y!=v.y || z!=v.z); }
+    bool operator < (const T xx) const { return (fabs(x)<xx && fabs(y)<xx && fabs(z)<xx); }
     
     Vec3& operator /= (const T &r)
     { x /= r, y /= r, z /= r; return *this; }

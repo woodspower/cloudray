@@ -23,7 +23,7 @@
 #define MY_UINT64_T     uint64_t
 #define VIEW_WIDTH      640
 #define VIEW_HEIGHT     480
-#define RAY_CAST_DESITY 0.1
+#define RAY_CAST_DESITY 1.
 /*
 #define LIGHT_NUM_MAX 3
 #define OBJ_NUM_MAX   5
@@ -229,8 +229,8 @@ public:
         if(angles == nullptr) return angle;
         angle = angles + v%vAngleRes*hAngleRes + h%hAngleRes;
         if (relPoint != nullptr) {
-            float theta = v*90.0/vAngleRes;
-            float phi = h*360.0/hAngleRes;
+            float theta = deg2rad(v*90.0/vAngleRes);
+            float phi = deg2rad(h*360.0/hAngleRes);
             assert (theta>=0. && theta<=90.);
             assert (phi>=0. && phi<360.);
             // modified by xinhou @20200205
@@ -256,7 +256,7 @@ public:
         return angles + v*hAngleRes + h;
     }
 
-    SurfaceAngle* getSurfaceAngleByDir(const Vec3f &dir) const
+    SurfaceAngle* getSurfaceAngleByDir(const Vec3f &dir, uint32_t *angleV = nullptr, uint32_t *angleH = nullptr) const
     {
         Vec3f dirWorld;
         if(angles == nullptr) return nullptr;
@@ -279,6 +279,8 @@ public:
         uint32_t v,h;
         v = floor(theta/90.0*vAngleRes);
         h = floor(phi/360.0*hAngleRes);
+        if (angleV != nullptr) *angleV = v;
+        if (angleH != nullptr) *angleH = h;
         return angles + v*hAngleRes + h;
     }
 
@@ -761,7 +763,7 @@ public:
                 break;
             default:
                 ampRatio = 2.*ratio;
-                surfaceAngleRatio = ratio;
+                surfaceAngleRatio = 0.01*ratio;
                 break;
         }
         uint32_t maxIndex = 0;
@@ -1577,8 +1579,24 @@ void objectRender(
     Vec3f   orig = 0;
     uint32_t v=0, h=0;
 
+
+    // LEO: debug a angle color
+    char outfile[256];
+    std::sprintf(outfile,
+        "angle[%s]_density.%.2f_dep.%d_spp.%d_split.%d.ppm", objects[1].get()->name.c_str(), RAY_CAST_DESITY, options.maxDepth, options.spp,
+        options.diffuseSpliter);
+    std::ofstream ofs;
+    ofs.open(outfile);
+    ofs << "P3\n" << objects[1].get()->hRes << " " << objects[1].get()->vRes << "\n255\n";
+    uint32_t currV=0xffffffff, currH=0xffffffff;
+    int r=0, g=0, b=0;
+                    
+
+    
+
     for (uint32_t i=0; i<objects.size(); i++) {
         targetObject = objects[i].get();
+
         if (targetObject->surfaceAngleRatio <= 0.) continue;
         for (v=0; v<objects[i]->vRes; v++) {
             for (h=0; h<objects[i]->hRes; h++) {
@@ -1597,9 +1615,37 @@ void objectRender(
                         */
                         rayStore.currPixel = {(float)v, (float)h, 0};
                         angle->angleColor = backwardCastRay(rayStore, orig, dir, objects, lights, options, 0);
-                        std::cout << angle->angleColor <<  std::endl;
+                        //std::cout << angle->angleColor <<  std::endl;
+
+                        // LEO: debug a angle color
+                        //if (v != currV || h!= currH) {
+                        Vec3f debugDir = normalize(Vec3f(0) - orig);
+        //                Vec3f delta = debugDir - dir;
+#if 0
+                        std::cout << "===" << v << "," << h << "," << vAngle << "," << hAngle << delta << "===" << std::endl;
+                        std::cout << debugDir << std::endl;
+                        std::cout << dir << std::endl;
+#endif
+                        uint32_t vAngleTarget = 0, hAngleTarget = 0;
+                        targetSurface->getSurfaceAngleByDir(debugDir, &vAngleTarget, &hAngleTarget);
+                        //if (delta < 0.1) {
+                        if (vAngleTarget == vAngle && hAngleTarget == hAngle) {
+                     //       std::cout << "HITTED" << std::endl;
+                            std::cout << "!!!!===" << v << "," << h << "," << vAngle << "," << hAngle << angle->angleColor << "===" << std::endl;
+                            std::cout << debugDir << std::endl;
+                            std::cout << dir << std::endl;
+                     //       currV = v;
+                     //       currH = h;
+                            r = (int)(255 * clamp(0, 1, angle->angleColor.x));
+                            g = (int)(255 * clamp(0, 1, angle->angleColor.y));
+                            b = (int)(255 * clamp(0, 1, angle->angleColor.z));
+                        }
+                        //}
                     }
                 }
+                // LEO: debug a angle color
+                ofs << r << " " << g << " " << b << "\n ";
+                r = g = b = 0;
                 // rayStore.dumpObjectTraceLink(objects, i, 0, 0);
                 // dump object shadepoint as ppm file
                 //objects[i]->dumpSurfaceAngles(options);
@@ -1607,6 +1653,9 @@ void objectRender(
         }
         objects[i]->dumpSurfaceAngles(options);
     }
+
+    // LEO: debug a angle color
+    ofs.close();
 }
 
 
@@ -1694,6 +1743,16 @@ void eyeRender(
     //Vec3f orig(0);
     for (uint32_t j = 0; j < options.height; ++j) {
         for (uint32_t i = 0; i < options.width; ++i) {
+#if 0
+//DEBUG LEO
+            Object *obj = objects[1].get();
+            uint32_t v = (uint32_t)((float)j * obj->vRes / options.height);
+            uint32_t h = (uint32_t)((float)i * obj->hRes / options.width);
+            Vec3f  worldTarget;
+            obj->getSurfaceByVH(v, h, &worldTarget);
+            Vec3f dir = normalize(worldTarget-orig);
+#endif
+
             // generate primary ray direction
             float x = (2 * (i + 0.5) / (float)options.width - 1) * imageAspectRatio * scale;
             float y = (1 - 2 * (j + 0.5) / (float)options.height) * scale;
@@ -1820,7 +1879,7 @@ int main(int argc, char **argv)
     //options[0].bias = 0.001;
     options[0].bias = 0.001;
     options[0].doTraditionalRender = false;
-    options[0].doRenderAfterDiffusePreprocess = true;
+    options[0].doRenderAfterDiffusePreprocess = false;
     options[0].doRenderAfterDiffuseAndReflectPreprocess = true;
 
     options[0].viewpoints[0] = Vec3f(0, 5, 0);
