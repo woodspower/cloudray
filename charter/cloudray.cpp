@@ -21,8 +21,8 @@
 #include "geometry.h"
 
 #define MY_UINT64_T     uint64_t
-#define VIEW_WIDTH      640
-#define VIEW_HEIGHT     480
+#define VIEW_WIDTH      400 //640
+#define VIEW_HEIGHT     196 //480
 #define RAY_CAST_DESITY 1.
 /*
 #define LIGHT_NUM_MAX 3
@@ -762,8 +762,9 @@ public:
                 surfaceAngleRatio = 0.0;
                 break;
             default:
-                ampRatio = 2.*ratio;
-                surfaceAngleRatio = 0.01*ratio;
+                //ampRatio = 2.*ratio;
+                ampRatio = 0.25*ratio;
+                surfaceAngleRatio = 0.1*ratio;
                 break;
         }
         uint32_t maxIndex = 0;
@@ -1631,9 +1632,11 @@ void objectRender(
                         //if (delta < 0.1) {
                         if (vAngleTarget == vAngle && hAngleTarget == hAngle) {
                      //       std::cout << "HITTED" << std::endl;
+#if 0
                             std::cout << "!!!!===" << v << "," << h << "," << vAngle << "," << hAngle << angle->angleColor << "===" << std::endl;
-                            std::cout << debugDir << std::endl;
-                            std::cout << dir << std::endl;
+                            std::cout << normalize(orig) << std::endl;
+                     //       std::cout << dir << std::endl;
+#endif
                      //       currV = v;
                      //       currH = h;
                             r = (int)(255 * clamp(0, 1, angle->angleColor.x));
@@ -1741,18 +1744,9 @@ void eyeRender(
     float scale = tan(deg2rad(options.fov * 0.5));
     float imageAspectRatio = options.width / (float)options.height;
     //Vec3f orig(0);
+#if 1
     for (uint32_t j = 0; j < options.height; ++j) {
         for (uint32_t i = 0; i < options.width; ++i) {
-#if 0
-//DEBUG LEO
-            Object *obj = objects[1].get();
-            uint32_t v = (uint32_t)((float)j * obj->vRes / options.height);
-            uint32_t h = (uint32_t)((float)i * obj->hRes / options.width);
-            Vec3f  worldTarget;
-            obj->getSurfaceByVH(v, h, &worldTarget);
-            Vec3f dir = normalize(worldTarget-orig);
-#endif
-
             // generate primary ray direction
             float x = (2 * (i + 0.5) / (float)options.width - 1) * imageAspectRatio * scale;
             float y = (1 - 2 * (j + 0.5) / (float)options.height) * scale;
@@ -1762,6 +1756,20 @@ void eyeRender(
             // tracker the ray
             rayStore.record(RAY_TYPE_ORIG, rayStore.eyeTraceLinks, j*VIEW_WIDTH+i, orig, dir);
 
+//DEBUG by LEO to compare backward tracing and forward tracing
+#else
+    for (uint32_t i = 0; i < options.width; ++i) {
+        for (uint32_t j = 0; j < options.height; ++j) {
+            Object *obj = objects[1].get();
+            uint32_t h = (uint32_t)((float)j * obj->hRes / options.height);
+            uint32_t v = (uint32_t)((float)i * obj->vRes / options.width);
+            Vec3f  worldTarget;
+            obj->getSurfaceByVH(v, h, &worldTarget);
+            Vec3f dir = normalize(worldTarget-orig);
+
+
+#endif
+
 #ifdef CAMERATOWORLD
             cameraToWorld.multVecMatrix(orig, origWorld);
             cameraToWorld.multDirMatrix(dir, dirWorld);
@@ -1770,7 +1778,12 @@ void eyeRender(
 #else
             *(pix++) = backwardCastRay(rayStore, orig, dir, objects, lights, options, 0, withLightRender, withObjectRender);
 #endif
-            std::printf("%.0f%%\r",(j*options.width+i)*100.0/(options.width * options.height));
+
+#if 0
+            std::cout << "oooo===" << v << "," << h << "," << 0 << "," << 0 << *(pix-1) << "===" << std::endl;
+            std::cout << dir << std::endl;
+//            std::printf("%.0f%%\r",(j*options.width+i)*100.0/(options.width * options.height));
+#endif
         }
         //std::printf("%f\r",(j*1.0/options.height));
     }
@@ -1878,14 +1891,14 @@ int main(int argc, char **argv)
     //options[0].backgroundColor = Vec3f(0.0);
     //options[0].bias = 0.001;
     options[0].bias = 0.001;
-    options[0].doTraditionalRender = false;
-    options[0].doRenderAfterDiffusePreprocess = false;
+    options[0].doTraditionalRender = true;
+    options[0].doRenderAfterDiffusePreprocess = true;
     options[0].doRenderAfterDiffuseAndReflectPreprocess = true;
 
+/*
     options[0].viewpoints[0] = Vec3f(0, 5, 0);
     options[0].viewpoints[1] = Vec3f(-5, 0, -4);
     //options[0].viewpoints[2] = Vec3f(5, 0, 0);
-/*
     options[0].viewpoints[3] = Vec3f(2, 0, 0);
     options[0].viewpoints[4] = Vec3f(-2, 0, 0);
 */
