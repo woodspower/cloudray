@@ -23,7 +23,7 @@
 #define MY_UINT64_T     uint64_t
 #define VIEW_WIDTH      640
 #define VIEW_HEIGHT     480
-#define RAY_CAST_DESITY 1.
+#define RAY_CAST_DESITY 0.1
 /*
 #define LIGHT_NUM_MAX 3
 #define OBJ_NUM_MAX   5
@@ -771,9 +771,8 @@ public:
                 surfaceAngleRatio = 0.0;
                 break;
             default:
-                //ampRatio = 2.*ratio;
-                ampRatio = 1.*ratio;
-                surfaceAngleRatio = 0.1*ratio;
+                ampRatio = 2.*ratio;
+                surfaceAngleRatio = 1.*ratio;
                 break;
         }
         uint32_t maxIndex = 0;
@@ -1599,20 +1598,7 @@ void objectRender(
     Vec3f   orig = 0;
     uint32_t v=0, h=0;
 
-
-    // LEO: debug a angle color
-    char outfile[256];
-    std::sprintf(outfile,
-        "angle[%s]_density.%.2f_dep.%d_spp.%d_split.%d.ppm", objects[1].get()->name.c_str(), RAY_CAST_DESITY, options.maxDepth, options.spp,
-        options.diffuseSpliter);
-    std::ofstream ofs;
-    ofs.open(outfile);
-    ofs << "P3\n" << objects[1].get()->hRes << " " << objects[1].get()->vRes << "\n255\n";
-    uint32_t currV=0xffffffff, currH=0xffffffff;
-    int r=0, g=0, b=0;
-                    
-
-    
+//#define DEBUG_ANGLE_ZERO
 
     for (uint32_t i=0; i<objects.size(); i++) {
         targetObject = objects[i].get();
@@ -1622,53 +1608,37 @@ void objectRender(
             for (h=0; h<objects[i]->hRes; h++) {
                 targetSurface = targetObject->getSurfaceByVH(v, h, &target);
                 if (targetSurface == nullptr) continue;
+
+                // LEO: debug a angle color
+#ifdef DEBUG_ANGLE_ZERO
+                Vec3f debugDir = normalize(Vec3f(0) - target);
+                uint32_t vAngleTarget = 0, hAngleTarget = 0;
+                targetSurface->getSurfaceAngleByDir(debugDir, &vAngleTarget, &hAngleTarget);
+#endif
+
                 for (uint32_t vAngle=0; vAngle<targetSurface->vAngleRes; vAngle++) {
                     for (uint32_t hAngle=0; hAngle<targetSurface->hAngleRes; hAngle++) {
                         SurfaceAngle *angle = targetSurface->getSurfaceAngleByVH(vAngle, hAngle, &dir);
                         if (angle == nullptr) continue;
-                        // dir of forwordCastRay is relative to orig
-                        rayStore.originRays++;
-                        // tracker the ray
-                        /*
-                        if (objects[i]->recorderEnabled)
-                            rayStore.record(RAY_TYPE_ORIG, objects[i]->traceLinks, v*objects[i]->hRes + h, orig, dir);
-                        */
-                        orig = target + dir;
-                        rayStore.currPixel = {(float)v, (float)h, 0};
-                        angle->angleColor = backwardCastRay(rayStore, orig, -dir, objects, lights, options, 0);
-                        //std::cout << angle->angleColor <<  std::endl;
 
-                        // LEO: debug a angle color
-                        //if (v != currV || h!= currH) {
-                        Vec3f debugDir = normalize(Vec3f(0) - target);
-        //                Vec3f delta = debugDir - dir;
-#if 0
-                        std::cout << "===" << v << "," << h << "," << vAngle << "," << hAngle << delta << "===" << std::endl;
-                        std::cout << debugDir << std::endl;
-                        std::cout << dir << std::endl;
+#ifdef DEBUG_ANGLE_ZERO
+                        if (abs(vAngleTarget-vAngle)<5*ceil(targetSurface->angleRatio) && \
+                            abs(hAngleTarget-hAngle)<5*ceil(targetSurface->angleRatio)) {
 #endif
-                        uint32_t vAngleTarget = 0, hAngleTarget = 0;
-                        targetSurface->getSurfaceAngleByDir(debugDir, &vAngleTarget, &hAngleTarget);
-                        //if (delta < 0.1) {
-                        if (vAngleTarget == vAngle && hAngleTarget == hAngle) {
-                     //       std::cout << "HITTED" << std::endl;
-#if 0
-                            std::cout << "!!!!===" << v << "," << h << "," << vAngle << "," << hAngle << angle->angleColor << "===" << std::endl;
-                            std::cout << normalize(orig) << std::endl;
-                     //       std::cout << dir << std::endl;
-#endif
-                     //       currV = v;
-                     //       currH = h;
-                            r = (int)(255 * clamp(0, 1, angle->angleColor.x));
-                            g = (int)(255 * clamp(0, 1, angle->angleColor.y));
-                            b = (int)(255 * clamp(0, 1, angle->angleColor.z));
+                            // dir of forwordCastRay is relative to orig
+                            rayStore.originRays++;
+                            // tracker the ray
+                            if (objects[i]->recorderEnabled)
+                                rayStore.record(RAY_TYPE_ORIG, objects[i]->traceLinks, v*objects[i]->hRes + h, orig, dir);
+                            orig = target + dir;
+                            rayStore.currPixel = {(float)v, (float)h, 0};
+                            angle->angleColor = backwardCastRay(rayStore, orig, -dir, objects, lights, options, 0);
+                            //std::cout << angle->angleColor <<  std::endl;
+#ifdef DEBUG_ANGLE_ZERO
                         }
-                        //}
+#endif
                     }
                 }
-                // LEO: debug a angle color
-                ofs << r << " " << g << " " << b << "\n ";
-                r = g = b = 0;
                 // rayStore.dumpObjectTraceLink(objects, i, 0, 0);
                 // dump object shadepoint as ppm file
                 //objects[i]->dumpSurfaceAngles(options);
@@ -1678,7 +1648,7 @@ void objectRender(
     }
 
     // LEO: debug a angle color
-    ofs.close();
+    //ofs.close();
 }
 
 
