@@ -75,6 +75,29 @@ public:
 };
 */
 
+// Leo: create a matrix by using lookat function
+Matrix44f lookAt(const Vec3f& from, const Vec3f& to, const Vec3f& tmp = Vec3f(1, 0, 0)) 
+{ 
+    Vec3f up = (to - from); 
+    up = up.normalize();
+    Vec3f forward = tmp.crossProduct(up);
+    Vec3f right = up.crossProduct(forward); 
+    Matrix44f x; 
+    x[0][0] = right.x; 
+    x[0][1] = right.y; 
+    x[0][2] = right.z; 
+    x[1][0] = up.x; 
+    x[1][1] = up.y; 
+    x[1][2] = up.z; 
+    x[2][0] = forward.x; 
+    x[2][1] = forward.y; 
+    x[2][2] = forward.z; 
+     
+    x[3][0] = from.x; 
+    x[3][1] = from.y; 
+    x[3][2] = from.z; 
+    return x;
+} 
 Vec3f normalize(const Vec3f &v)
 {
     float mag2 = v.x * v.x + v.y * v.y + v.z * v.z;
@@ -214,7 +237,7 @@ public:
         idx = index;
         N = normal;
         if (angleRatio > 0.0) {
-            local2World = Matrix44f(center, center+N);
+            local2World = lookAt(center, center+N);
             world2Local = local2World.inverse();
             //std::cout << center << normal << std::endl << local2World << std::endl;
         }
@@ -229,7 +252,7 @@ public:
         if(angles == nullptr) return angle;
         angle = angles + v%vAngleRes*hAngleRes + h%hAngleRes;
         if (relPoint != nullptr) {
-            float theta = deg2rad(v*90.0/vAngleRes);
+            float theta = deg2rad(v*91.0/vAngleRes);
             float phi = deg2rad(h*360.0/hAngleRes);
             assert (theta>=0. && theta<=90.);
             assert (phi>=0. && phi<360.);
@@ -252,7 +275,7 @@ public:
         /* caculate the hit angle refer to sphere Normal on the surface */
         /* each surface will cast rays into a half sphere space which express as theta[0,90),phi[0,360) */
         uint32_t v,h;
-        v = floor(theta/90.0*vAngleRes);
+        v = floor(theta/91.0*vAngleRes);
         h = floor(phi/360.0*hAngleRes);
         return angles + v*hAngleRes + h;
     }
@@ -279,7 +302,7 @@ public:
         /* caculate the hit angle refer to sphere Normal on the surface */
         /* each surface will cast rays into a half sphere space which express as theta[0,90),phi[0,360) */
         uint32_t v,h;
-        v = floor(theta/90.0*vAngleRes);
+        v = floor(theta/91.0*vAngleRes);
         h = floor(phi/360.0*hAngleRes);
         if (angleV != nullptr) *angleV = v;
         if (angleH != nullptr) *angleH = h;
@@ -650,7 +673,7 @@ public:
                 curr = getSurfaceByVH(v, h);
                 // v(0, 1, 2, ... , 17) ==> theta(0, 10, 20, ..., 180)
                 // TBD: bugfix when v is 180, theta is only 180/181*180
-                theta = deg2rad(180.f * v/vRes);
+                theta = deg2rad(181.f * v/vRes);
                 phi = deg2rad(360.f * h/hRes);
                 //Vec3f normal = Vec3f(sin(phi)*sin(theta), cos(theta), cos(phi)*sin(theta));
                 Vec3f normal = Vec3f(cos(phi)*sin(theta), cos(theta), sin(phi)*sin(theta));
@@ -734,7 +757,7 @@ bool rayTriangleIntersect(
     Vec3f edge2 = v2 - v0;
     Vec3f pvec = crossProduct(dir, edge2);
     float det = dotProduct(edge1, pvec);
-    if (det == 0 || det < 0) return false;
+    if (fabs(det) < 0.000001) return false;
 
     Vec3f tvec = orig - v0;
     u = dotProduct(tvec, pvec);
@@ -750,7 +773,7 @@ bool rayTriangleIntersect(
     u *= invDet;
     v *= invDet;
 
-    return true;
+    return tnear < 0? false: true;
 }
 
 class MeshTriangle : public Object
@@ -771,8 +794,8 @@ public:
                 surfaceAngleRatio = 0.0;
                 break;
             default:
-                ampRatio = 2.*ratio;
-                surfaceAngleRatio = 1.*ratio;
+                ampRatio = 10.*ratio;
+                surfaceAngleRatio = 5.*ratio;
                 break;
         }
         uint32_t maxIndex = 0;
@@ -871,7 +894,7 @@ public:
                 index = k;
                 u = uK;
                 v = vK;
-                intersect |= true;
+                intersect = true;
             }
         }
 
@@ -882,7 +905,11 @@ public:
             Vec2f st = st0 * (1 - u - v) + st1 * u + st2 * v;
             point = orig + dir * tnear;
             assert ( 0 <= st.x <= 1.0 && 0 <= st.y <= 1.0);
-            Surface *pSurface = getSurfaceByVH(floor(st.y*vRes), floor(st.x*hRes));
+            uint32_t v = round(st.y*vRes);
+            uint32_t h = round(st.x*hRes);
+            if (v >= vRes) v = vRes - 1;
+            if (h >= hRes) h = hRes - 1;
+            Surface *pSurface = getSurfaceByVH(v, h);
             assert(surface != nullptr);
             *surface = pSurface;
             /* set the bitmap index */
@@ -1598,7 +1625,7 @@ void objectRender(
     Vec3f   orig = 0;
     uint32_t v=0, h=0;
 
-//#define DEBUG_ANGLE_ZERO
+#define DEBUG_ANGLE_ZERO
 
     for (uint32_t i=0; i<objects.size(); i++) {
         targetObject = objects[i].get();
@@ -1678,7 +1705,7 @@ void lightRender(
                 // dir of forwordCastRay is relative to orig
                 // dir = center + P.rel(theta, phi)*radius - orig
                 // set the test point a little bit far away the center of sphere. test point is rel address from orig.
-                testPoint = targetPoint + targetSurface->N*options.bias - orig;
+                testPoint = normalize(targetPoint + targetSurface->N*options.bias - orig);
                 rayStore.originRays++;
                 // tracker the ray
                 if (objects[i]->recorderEnabled)
@@ -1875,7 +1902,7 @@ int main(int argc, char **argv)
     options[0].spp = 1;
     options[0].width = VIEW_WIDTH*options[0].spp;
     options[0].height = VIEW_HEIGHT*options[0].spp;
-    options[0].fov = 90;
+    options[0].fov = 60;
     //options[0].backgroundColor = Vec3f(0.235294, 0.67451, 0.843137);
     options[0].backgroundColor = Vec3f(0.95, 0.95, 0.95);
     //options[0].backgroundColor = Vec3f(0.0);
@@ -1884,6 +1911,7 @@ int main(int argc, char **argv)
     options[0].doTraditionalRender = true;
     options[0].doRenderAfterDiffusePreprocess = true;
     options[0].doRenderAfterDiffuseAndReflectPreprocess = true;
+    options[0].viewpoints[0] = Vec3f(0, 0, 10);
 
 /*
     options[0].viewpoints[0] = Vec3f(0, 5, 0);
